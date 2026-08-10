@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Фаєрвол — ассеты</title>
+    <style>
+      @font-face { font-family: 'PixelHalf'; src: url('/HalfBoldPixel7.ttf') format('truetype'); font-display: block; }
+      :root {
+        --bg: #140a08; --panel: #201110; --line: #4a2c26; --ink: #e8dcd4;
+        --muted: #a07a6a; --gold: #e8c840; --red: #ff4a2a; --green: #7bd88f;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; background: var(--bg); color: var(--ink); }
+      body { font: 14px/1.5 ui-monospace, "SF Mono", Menlo, monospace; padding-bottom: 80px; }
+      #bgcanvas { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 0; pointer-events: none; }
+      .wrap { position: relative; z-index: 1; max-width: 1180px; margin: 0 auto; padding: 0 18px; }
+      header {
+        padding: 40px 0 26px; text-align: center;
+        background: linear-gradient(180deg, rgba(180,40,10,.35), transparent);
+      }
+      h1 {
+        font-family: 'PixelHalf', monospace; font-size: 46px; margin: 0 0 6px;
+        color: var(--gold); text-shadow: 0 0 26px rgba(255,90,20,.85); letter-spacing: 2px;
+      }
+      .sub { color: var(--muted); font-size: 13px; }
+      h2 {
+        font-family: 'PixelHalf', monospace; font-size: 25px; color: var(--gold);
+        margin: 40px 0 4px; border-bottom: 2px solid var(--line); padding-bottom: 8px;
+      }
+      h2 small { display: block; font-family: inherit; font-size: 12px; color: var(--muted); margin-top: 6px; }
+      .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 14px; margin-top: 18px; }
+      /* .view оставляем ПРОЗРАЧНОЙ: сквозь неё видно общий 3D-canvas под страницей */
+      .card {
+        background: transparent; border: 2px solid var(--line); border-radius: 6px;
+        overflow: hidden; display: flex; flex-direction: column;
+      }
+      .view { height: 170px; position: relative; background: transparent; }
+      .meta { padding: 9px 11px 11px; border-top: 1px solid var(--line); background: var(--panel); }
+      .nm { font-family: 'PixelHalf', monospace; font-size: 16px; color: var(--gold); }
+      .nm .vet { color: var(--red); }
+      .st { color: var(--muted); font-size: 11.5px; margin-top: 4px; }
+      .st b { color: var(--ink); font-weight: normal; }
+      .sfxgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(238px, 1fr)); gap: 10px; margin-top: 16px; }
+      .sfx {
+        background: var(--panel); border: 2px solid var(--line); border-radius: 6px;
+        padding: 10px 12px; cursor: pointer; text-align: left; color: var(--ink);
+        font: inherit; transition: border-color .12s, background .12s;
+      }
+      .sfx:hover { border-color: var(--gold); background: #2a1714; }
+      .sfx:active { background: #3a201a; }
+      .sfx.on { border-color: var(--gold); background: #3a201a; }
+      .sfx .t { font-family: 'PixelHalf', monospace; font-size: 15px; color: var(--gold); }
+      .sfx .h { color: var(--muted); font-size: 11px; margin-top: 3px; }
+      .group-t { color: var(--muted); font-size: 12px; margin: 22px 0 -4px; text-transform: uppercase; letter-spacing: 1px; }
+      .bar { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+      .btn {
+        font: inherit; font-family: 'PixelHalf', monospace; font-size: 16px; cursor: pointer;
+        background: #2a1714; color: var(--gold); border: 2px solid var(--line);
+        padding: 10px 18px; border-radius: 5px;
+      }
+      .btn:hover { border-color: var(--gold); }
+      .btn.on { background: var(--gold); color: #1a0d0a; }
+      .pal { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+      .sw { width: 96px; }
+      .sw i { display: block; height: 44px; border-radius: 4px; border: 1px solid #0006; }
+      .sw span { font-size: 10.5px; color: var(--muted); display: block; margin-top: 4px; word-break: break-all; }
+      table { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 12.5px; }
+      th, td { text-align: left; padding: 7px 9px; border-bottom: 1px solid var(--line); }
+      th { color: var(--muted); font-weight: normal; }
+      td b { color: var(--gold); font-weight: normal; }
+      .note {
+        margin-top: 16px; padding: 12px 14px; border-left: 3px solid var(--gold);
+        background: #ffffff08; color: var(--muted); font-size: 12.5px;
+      }
+      .note b { color: var(--ink); font-weight: normal; }
+      audio { width: 100%; margin-top: 10px; filter: sepia(.4) hue-rotate(-20deg); }
+    </style>
+  </head>
+  <body>
+    <canvas id="bgcanvas"></canvas>
+    <div class="wrap">
+      <header>
+        <h1>ФАЄРВОЛ</h1>
+        <div class="sub">витрина ассетов мини-игры «Фриланс — отбить DDoS» · всё оригинальное, собрано кодом</div>
+      </header>
+
+      <h2>Монстры<small>слева обычные, справа ветераны (краснее, +70% HP). Модели берутся из того же модуля, что и игра.</small></h2>
+      <div class="grid" id="g-mon"></div>
+
+      <h2>Оружие<small>модель в руках + характеристики</small></h2>
+      <div class="grid" id="g-wpn"></div>
+
+      <h2>Пикапы<small>респавн через 14 секунд</small></h2>
+      <div class="grid" id="g-pick"></div>
+
+      <h2>Пентаграмма-портал<small>рунная печать спавна: кольца, звезда одним росчерком, глифы. Карточка крутит полный телеграф — за 2 с до монстра всплывает голограмма и столб искр, через 1 с после появления всё гаснет</small></h2>
+      <div class="grid" id="g-portal"></div>
+
+      <h2>Реквизит арены</h2>
+      <div class="grid" id="g-prop"></div>
+
+      <h2>Палитра</h2>
+      <div class="pal" id="pal"></div>
+
+      <h2>Звук<small>клик — прослушать. Здесь всё звучит «в упор» и по центру; в игре звуки монстров, взрывов, печатей и пикапов идут из своей точки арены — с затуханием по дистанции, панорамой и глухотой вдали.</small></h2>
+      <div class="bar">
+        <button class="btn" id="music">▶ СИНТЕЗ-ЛУП (резерв)</button>
+        <button class="btn" id="int0">затишье</button>
+        <button class="btn" id="int1">бой</button>
+      </div>
+      <div id="g-sfx"></div>
+
+      <h2>Саундтрек E1<small>живые кроссфейды: жми дорожки подряд — они накладываются, как в игре. Конвертировано в Opus (+AAC для Safari), 88 МБ → 1.7 МБ</small></h2>
+      <div id="tracks"></div>
+
+      <h2>Справка по волнам</h2>
+      <table>
+        <tr><th>Что</th><th>Правило</th></tr>
+        <tr><td><b>Гонорар</b></td><td>60₴ за первую волну, +40₴ за каждую следующую</td></tr>
+        <tr><td><b>Бюджет волны</b></td><td>4 + волна × 2.4 (цена монстра — в его карточке)</td></tr>
+        <tr><td><b>Каждая 5-я</b></td><td>наплыв бомбистов (75% спавнов)</td></tr>
+        <tr><td><b>Ветераны</b></td><td>с 4-й волны, шанс растёт до 50%</td></tr>
+        <tr><td><b>Дробовик / пулемёт</b></td><td>волна 3 / волна 6</td></tr>
+      </table>
+
+      <div class="note">
+        <b>Права.</b> Все модели и звуковые эффекты на этой странице сгенерированы кодом в этом
+        репозитории — чужих ассетов нет. Пентаграмма нарисована своей геометрией по мотивам
+        общедоступного оккультного символа.<br><br>
+        Единственное внешнее — <b>музыка</b>: саундтрек E1 (main / middle / end / chill) и
+        <b>Bitcrash Battalion.mp3</b> из папки <b>my assets/doom/music</b>. Их происхождение и лицензию
+        нужно подтвердить до публичного билда — особенно с учётом планов на itch.io и донаты.
+      </div>
+    </div>
+    <script type="module" src="/src/assetsViewer.ts"></script>
+  </body>
+</html>
