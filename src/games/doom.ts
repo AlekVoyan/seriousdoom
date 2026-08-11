@@ -174,7 +174,9 @@ export const doom: MiniGame3D = {
         ? { bg: 0x6fa8dc, fog: 0x9cc2e0, near: 46, far: 195, amb: 1.0, dir: 0.75, fill: 0.1 }
         : sky === 'dusk'
           ? { bg: 0x542012, fog: 0x4c1e10, near: 30, far: 115, amb: 0.74, dir: 0.42, fill: 0.28 }
-          : { bg: 0x2a0a08, fog: 0x300c08, near: 22, far: 80, amb: 0.62, dir: 0.3, fill: 0.4 };
+          : sky === 'void'
+            ? { bg: 0x0d0608, fog: 0x150a0e, near: 24, far: 92, amb: 0.5, dir: 0.24, fill: 0.36 }
+            : { bg: 0x2a0a08, fog: 0x300c08, near: 22, far: 80, amb: 0.62, dir: 0.3, fill: 0.4 };
       (ctx.scene.background as THREE.Color).setHex(cfg.bg);
       const f = ctx.scene.fog as THREE.Fog;
       f.color.setHex(cfg.fog); f.near = cfg.near; f.far = cfg.far;
@@ -245,7 +247,7 @@ export const doom: MiniGame3D = {
     let ARENA = A.size;   // полуразмер: обновляется при пересборке арены
 
     // всё строится в buildArenaLive: размер арены теперь часть ArenaDef
-    interface Pillar { x: number; z: number; r: number; rz: number; kind: 'block' | 'obelisk' | 'wall' | 'pyramid' | 'rubble' }
+    interface Pillar { x: number; z: number; r: number; rz: number; kind: 'block' | 'obelisk' | 'wall' | 'pyramid' | 'rubble' | 'column' | 'steps' | 'rock' }
     interface Torch { light: THREE.PointLight; flame: THREE.Mesh; ph: number }
     let pillars: Pillar[] = [];
     let torches: Torch[] = [];
@@ -272,8 +274,9 @@ export const doom: MiniGame3D = {
           if (ground === 'checker') col = (ix + iz) % 2 ? C_FLOOR_A : C_FLOOR_B;
           else if (ground === 'sand_road' && Math.abs(cx) < TS) col = ROAD[(((ix + iz) % 2) + 2) % 2];
           else {
+            const STONE = [0x4c4238, 0x554a40, 0x453c34, 0x5c5046];
             const h = Math.abs((ix * 73856093) ^ (iz * 19349663));
-            col = SAND[h % SAND.length];
+            col = ground === 'stone' ? STONE[h % STONE.length] : SAND[h % SAND.length];
           }
           const t = box(TS - 0.06, 0.3, TS - 0.06, col);
           t.position.set(cx, -0.15, iz * TS + TS / 2);
@@ -322,6 +325,44 @@ export const doom: MiniGame3D = {
           const w = box(p.r * 2, 4.2, p.rz * 2, C_WALL); w.position.set(p.x, 2.1, p.z); varG.add(w);
           const t = box(p.r * 2 + 0.3, 0.5, p.rz * 2 + 0.3, C_WALL_TRIM); t.position.set(p.x, 4.35, p.z); varG.add(t);
           const bqs = box(p.r * 2 + 0.4, 0.4, p.rz * 2 + 0.4, C_WALL_TRIM); bqs.position.set(p.x, 0.2, p.z); varG.add(bqs);
+        } else if (p.kind === 'column') {
+          // готическая колонна: база, стройный ствол, капитель
+          const cb = box(p.r * 2 + 0.5, 0.6, p.rz * 2 + 0.5, C_WALL_TRIM); cb.position.set(p.x, 0.3, p.z); varG.add(cb);
+          const sh = box(p.r * 1.6, 5.4, p.rz * 1.6, C_PILLAR); sh.position.set(p.x, 3.3, p.z); varG.add(sh);
+          const cap = box(p.r * 2 + 0.4, 0.5, p.rz * 2 + 0.4, C_WALL_TRIM); cap.position.set(p.x, 6.25, p.z); varG.add(cap);
+          const top = box(p.r * 2, 0.4, p.rz * 2, C_PILLAR); top.position.set(p.x, 6.7, p.z); varG.add(top);
+        } else if (p.kind === 'steps') {
+          // ступени: три яруса, поднимаются вдоль короткой оси (T поворачивает)
+          const alongZ = p.rz <= p.r;
+          const n = 3;
+          for (let i = 0; i < n; i++) {
+            const h = 0.55 * (i + 1);
+            if (alongZ) {
+              const d = (p.rz * 2) / n;
+              const st = box(p.r * 2, h, d, i % 2 ? C_PILLAR : C_WALL_TRIM);
+              st.position.set(p.x, h / 2, p.z + p.rz - d * (i + 0.5));
+              varG.add(st);
+            } else {
+              const d = (p.r * 2) / n;
+              const st = box(d, h, p.rz * 2, i % 2 ? C_PILLAR : C_WALL_TRIM);
+              st.position.set(p.x + p.r - d * (i + 0.5), h / 2, p.z);
+              varG.add(st);
+            }
+          }
+        } else if (p.kind === 'rock') {
+          // валуны: пара серых глыб
+          let hsh = Math.abs(Math.round(p.x * 53 + p.z * 29)) + 3;
+          const rnd = () => { hsh = (hsh * 1103515245 + 12345) & 0x7fffffff; return hsh / 0x7fffffff; };
+          const n = 2 + Math.floor(rnd() * 2);
+          const RC = [0x6a6058, 0x5a5048, 0x746a60];
+          for (let i = 0; i < n; i++) {
+            const w = p.r * (0.7 + rnd() * 0.9);
+            const h = 0.6 + rnd() * (p.r * 1.1);
+            const rk = box(w, h, p.rz * (0.7 + rnd() * 0.9), RC[Math.floor(rnd() * RC.length)]);
+            rk.position.set(p.x + (rnd() - 0.5) * p.r, h / 2 - 0.05, p.z + (rnd() - 0.5) * p.rz);
+            rk.rotation.y = (rnd() - 0.5) * 0.9;
+            varG.add(rk);
+          }
         } else if (p.kind === 'rubble') {
           // завал: груда каменных обломков, непроходимая, но невысокая —
           // видно, что «дальше был проход, но он обрушен»
@@ -804,13 +845,24 @@ export const doom: MiniGame3D = {
       // ── редактор ──
       if (phase === 'edit') {
         const mD = /^Digit(\d)$/.exec(e.code);
-        if (mD) { eSlot = mD[1] === '0' ? 9 : Number(mD[1]) - 1; return; }
+        if (mD) {
+          const gi = mD[1] === '0' ? 9 : Number(mD[1]) - 1;
+          if (gi < E_GROUPS.length) {
+            if (gi === gSel && E_GROUPS[gi].items.length > 1) {
+              vSel[gi] = (vSel[gi] + 1) % E_GROUPS[gi].items.length;   // повтор — вариант
+            }
+            gSel = gi;
+          }
+          return;
+        }
         if (e.code === 'KeyX') { eClickR = true; return; }
-        if (e.code === 'KeyT') { eRot = !eRot; eSay(eRot ? 'СТЕНА/РАЗВАЛ: ВДОЛЬ Z' : 'СТЕНА/РАЗВАЛ: ВДОЛЬ X'); return; }
+        if (e.code === 'KeyT') { eRot = !eRot; eSay(eRot ? 'ПОВОРОТ: ВДОЛЬ Z' : 'ПОВОРОТ: ВДОЛЬ X'); return; }
         if (e.code === 'KeyF') {
-          eDef.ground = eDef.ground === 'sand' ? 'sand_road' : eDef.ground === 'sand_road' ? 'checker' : 'sand';
+          eDef.ground = eDef.ground === 'sand' ? 'sand_road'
+            : eDef.ground === 'sand_road' ? 'stone'
+              : eDef.ground === 'stone' ? 'checker' : 'sand';
           rebuildEditor();
-          eSay(`ПОЛ: ${eDef.ground === 'checker' ? 'ШАХМАТКА' : eDef.ground === 'sand' ? 'ПЕСОК' : 'ПЕСОК + ДОРОГА'}`);
+          eSay(`ПОЛ: ${eDef.ground === 'checker' ? 'ШАХМАТКА' : eDef.ground === 'sand' ? 'ПЕСОК' : eDef.ground === 'sand_road' ? 'ПЕСОК + ДОРОГА' : 'КАМЕНЬ'}`);
           return;
         }
         if (e.code === 'KeyG') { testPlayFromEditor(); return; }
@@ -857,10 +909,10 @@ export const doom: MiniGame3D = {
           return;
         }
         if (e.code === 'KeyB') {
-          eDef.sky = eDef.sky === 'hell' ? 'dusk' : eDef.sky === 'dusk' ? 'day' : 'hell';
+          eDef.sky = eDef.sky === 'hell' ? 'dusk' : eDef.sky === 'dusk' ? 'day' : eDef.sky === 'day' ? 'void' : 'hell';
           applySky(eDef.sky);
           eSaveLocal();
-          eSay(`НЕБО: ${eDef.sky === 'hell' ? 'ПЕКЛО' : eDef.sky === 'dusk' ? 'ЗАКАТ' : 'ДЕНЬ'}`);
+          eSay(`НЕБО: ${eDef.sky === 'hell' ? 'ПЕКЛО' : eDef.sky === 'dusk' ? 'ЗАКАТ' : eDef.sky === 'day' ? 'ДЕНЬ' : 'ЧЕРНОТА'}`);
           return;
         }
         if (e.code === 'KeyK') {
@@ -937,7 +989,13 @@ export const doom: MiniGame3D = {
     const onCtxMenu = (e: Event) => { if (phase === 'edit') e.preventDefault(); };
     const onWheel = (e: WheelEvent) => {
       if (phase !== 'edit') return;
-      eSlot = (eSlot + (e.deltaY > 0 ? 1 : E_SLOTS.length - 1)) % E_SLOTS.length;
+      // плоский список всех вариантов: колесо идёт по нему насквозь
+      const flat: [number, number][] = [];
+      E_GROUPS.forEach((gr, gi) => gr.items.forEach((_, vi) => flat.push([gi, vi])));
+      let ix = flat.findIndex(([gi, vi]) => gi === gSel && vi === vSel[gSel]);
+      ix = (ix + (e.deltaY > 0 ? 1 : flat.length - 1)) % flat.length;
+      gSel = flat[ix][0];
+      vSel[gSel] = flat[ix][1];
     };
     const onMouseUp = () => { mouseDown = false; };
     const onLockChange = () => { locked = !!document.pointerLockElement; };
@@ -1167,31 +1225,71 @@ export const doom: MiniGame3D = {
       name: string; r: number; rz?: number; h: number;
       kind: 'pillar' | 'torch' | 'seal' | 'start' | 'med' | 'arm' | 'bul' | 'shl' | 'box';
       /** тип структуры для kind=pillar */
-      pk?: 'block' | 'obelisk' | 'wall' | 'pyramid' | 'rubble';
+      pk?: 'block' | 'obelisk' | 'wall' | 'pyramid' | 'rubble' | 'column' | 'steps' | 'rock';
     }
-    const E_SLOTS: ESlot[] = [
-      { name: 'ПИЛОН', r: 1.6, h: 5, kind: 'pillar', pk: 'block' },
-      { name: 'ПИЛОН+', r: 2.2, h: 5, kind: 'pillar', pk: 'block' },
-      { name: 'ОБЕЛИСК', r: 1.2, h: 11.5, kind: 'pillar', pk: 'obelisk' },
-      { name: 'СТЕНА', r: 2.5, rz: 0.7, h: 4.4, kind: 'pillar', pk: 'wall' },
-      { name: 'РАЗВАЛ', r: 3, rz: 1.6, h: 2.4, kind: 'pillar', pk: 'rubble' },
-      { name: 'ПИРАМИДА', r: 6, h: 9, kind: 'pillar', pk: 'pyramid' },
-      { name: 'ФАКЕЛ', r: 0.6, h: 3.9, kind: 'torch' },
-      { name: 'ПЕЧАТЬ', r: 2.0, h: 0.3, kind: 'seal' },
-      { name: 'АПТЕЧКА', r: 0.6, h: 0.9, kind: 'med' },
-      { name: 'БРОНЯ', r: 0.6, h: 0.9, kind: 'arm' },
-      { name: 'ПАТРОНЫ', r: 0.6, h: 0.9, kind: 'bul' },
-      { name: 'ДРОБЬ', r: 0.6, h: 0.9, kind: 'shl' },
-      { name: 'ЯЩИК', r: 0.6, h: 0.9, kind: 'box' },
-      { name: 'СТАРТ', r: 0.6, h: 1.9, kind: 'start' },
+    // Хотбар: цифра = категория; повторное нажатие листает варианты внутри,
+    // колесо мыши листает ВСЕ варианты подряд, T поворачивает прямоугольные.
+    const E_GROUPS: { name: string; items: ESlot[] }[] = [
+      {
+        name: 'СТЕНА', items: [
+          { name: 'СТЕНА', r: 2.5, rz: 0.7, h: 4.4, kind: 'pillar', pk: 'wall' },
+          { name: 'ДЛИННАЯ', r: 4, rz: 0.7, h: 4.4, kind: 'pillar', pk: 'wall' },
+          { name: 'КОРОТКАЯ', r: 1.5, rz: 0.7, h: 4.4, kind: 'pillar', pk: 'wall' },
+        ],
+      },
+      {
+        name: 'КОЛОННА', items: [
+          { name: 'ПИЛОН', r: 1.6, h: 5, kind: 'pillar', pk: 'block' },
+          { name: 'ПИЛОН+', r: 2.2, h: 5, kind: 'pillar', pk: 'block' },
+          { name: 'КОЛОННА', r: 1.4, h: 6.9, kind: 'pillar', pk: 'column' },
+          { name: 'ОБЕЛИСК', r: 1.2, h: 11.5, kind: 'pillar', pk: 'obelisk' },
+        ],
+      },
+      {
+        name: 'СТУПЕНИ', items: [
+          { name: 'СТУПЕНИ', r: 2.2, rz: 1.6, h: 1.7, kind: 'pillar', pk: 'steps' },
+          { name: 'ШИРОКИЕ', r: 3.6, rz: 1.6, h: 1.7, kind: 'pillar', pk: 'steps' },
+        ],
+      },
+      {
+        name: 'ПИРАМИДА', items: [
+          { name: 'ПИРАМИДА', r: 6, h: 9, kind: 'pillar', pk: 'pyramid' },
+          { name: 'ВЕЛИКАЯ', r: 9, h: 13, kind: 'pillar', pk: 'pyramid' },
+        ],
+      },
+      {
+        name: 'ОБЛОМКИ', items: [
+          { name: 'РАЗВАЛ', r: 3, rz: 1.6, h: 2.4, kind: 'pillar', pk: 'rubble' },
+          { name: 'КАМНИ', r: 1.4, h: 1.7, kind: 'pillar', pk: 'rock' },
+          { name: 'ГЛЫБА', r: 0.8, h: 1.3, kind: 'pillar', pk: 'rock' },
+        ],
+      },
+      { name: 'ФАКЕЛ', items: [{ name: 'ФАКЕЛ', r: 0.6, h: 3.9, kind: 'torch' }] },
+      { name: 'ПЕЧАТЬ', items: [{ name: 'ПЕЧАТЬ', r: 2.0, h: 0.3, kind: 'seal' }] },
+      {
+        name: 'ЗДОРОВЬЕ', items: [
+          { name: 'АПТЕЧКА', r: 0.6, h: 0.9, kind: 'med' },
+          { name: 'БРОНЯ', r: 0.6, h: 0.9, kind: 'arm' },
+        ],
+      },
+      {
+        name: 'ПАТРОНЫ', items: [
+          { name: 'ПАТРОНЫ', r: 0.6, h: 0.9, kind: 'bul' },
+          { name: 'ДРОБЬ', r: 0.6, h: 0.9, kind: 'shl' },
+          { name: 'ЯЩИК', r: 0.6, h: 0.9, kind: 'box' },
+        ],
+      },
+      { name: 'СТАРТ', items: [{ name: 'СТАРТ', r: 0.6, h: 1.9, kind: 'start' }] },
     ];
-    let eRot = false;   // T: стена вдоль X ↔ вдоль Z
+    let gSel = 0;
+    const vSel: number[] = E_GROUPS.map(() => 0);
+    const curSlot = (): ESlot => E_GROUPS[gSel].items[vSel[gSel]];
+    let eRot = false;   // T: прямоугольный след вдоль X ↔ вдоль Z
     const slotDims = (sl: ESlot): { rx: number; rz: number } => {
       const rz = sl.rz ?? sl.r;
-      return eRot && (sl.pk === 'wall' || sl.pk === 'rubble') ? { rx: rz, rz: sl.r } : { rx: sl.r, rz };
+      return eRot && rz !== sl.r ? { rx: rz, rz: sl.r } : { rx: sl.r, rz };
     };
     let eDef: ArenaDef = structuredClone(A);
-    let eSlot = 0;
     let eX = 0, eY = 9, eZ = 24, eYaw = 0, ePitch = -0.5;
     let eMsg = '', eMsgT = 0;
     let eClickL = false, eClickR = false;
@@ -1333,7 +1431,8 @@ export const doom: MiniGame3D = {
       for (let i = 0; i < eDef.pillars.length; i++) {
         const pl = eDef.pillars[i];
         const prz = pl.rz ?? pl.r;
-        const hh = pl.kind === 'obelisk' ? 12 : pl.kind === 'wall' ? 4.7 : pl.kind === 'pyramid' ? 9.4 : 5.4;
+        const hh = pl.kind === 'obelisk' ? 12 : pl.kind === 'wall' ? 4.7 : pl.kind === 'pyramid' ? 9.4
+          : pl.kind === 'column' ? 7.2 : pl.kind === 'steps' ? 2.0 : pl.kind === 'rock' ? 1.8 : pl.kind === 'rubble' ? 2.6 : 5.4;
         if (at(pl.x, pl.z, pl.r, prz)) return { type: 'pillar', ix: i, x: pl.x, z: pl.z, r: pl.r + 0.3, rz: prz + 0.3, h: hh };
       }
       return null;
@@ -1375,7 +1474,7 @@ export const doom: MiniGame3D = {
           if (Math.abs(hx) <= ARENA + 1 && Math.abs(hz) <= ARENA + 1) {
             const cx = Math.round(hx), cz = Math.round(hz);
             eFound = eFind(hx, hz);
-            const sl = E_SLOTS[eSlot];
+            const sl = curSlot();
             const d = slotDims(sl);
             const limX = sl.kind === 'torch' ? ARENA - 1 : sl.kind === 'pillar' ? Math.floor(ARENA - 1 - d.rx) : ARENA - 2;
             const limZ = sl.kind === 'torch' ? ARENA - 1 : sl.kind === 'pillar' ? Math.floor(ARENA - 1 - d.rz) : ARENA - 2;
@@ -1386,7 +1485,7 @@ export const doom: MiniGame3D = {
       }
 
       // ── привид и рамка ──
-      const sl = E_SLOTS[eSlot];
+      const sl = curSlot();
       if (eFound) {
         wire.visible = true;
         wire.scale.set(eFound.r * 2, eFound.h, eFound.rz * 2);
@@ -1646,8 +1745,9 @@ export const doom: MiniGame3D = {
       g.fillText(
         `пилоны ${c.pillars}/${ARENA_CAPS.pillars} · факелы ${c.torches}/${ARENA_CAPS.torches}` +
         ` · печати ${c.seals}/${ARENA_CAPS.seals} · предметы ${c.pickups}/${ARENA_CAPS.pickups}` +
-        ` · размер ${eDef.size * 2}×${eDef.size * 2} · небо: ${eDef.sky === 'hell' ? 'ПЕКЛО' : eDef.sky === 'dusk' ? 'ЗАКАТ' : 'ДЕНЬ'}` +
-        ` · пол: ${(eDef.ground ?? 'checker') === 'checker' ? 'ШАХМАТКА' : eDef.ground === 'sand' ? 'ПЕСОК' : 'ПЕСОК+ДОРОГА'}`,
+        ` · размер ${eDef.size * 2}×${eDef.size * 2}` +
+        ` · небо: ${eDef.sky === 'hell' ? 'ПЕКЛО' : eDef.sky === 'dusk' ? 'ЗАКАТ' : eDef.sky === 'day' ? 'ДЕНЬ' : 'ЧЕРНОТА'}` +
+        ` · пол: ${(eDef.ground ?? 'checker') === 'checker' ? 'ШАХМАТКА' : eDef.ground === 'sand' ? 'ПЕСОК' : eDef.ground === 'sand_road' ? 'ПЕСОК+ДОРОГА' : 'КАМЕНЬ'}`,
         14, 48,
       );
       if (c.seals < 2) {
@@ -1655,13 +1755,15 @@ export const doom: MiniGame3D = {
         g.fillText('нужно минимум 2 печати спавна, иначе тест не запустится', 14, 64);
       }
 
-      // хотбар
-      const n = E_SLOTS.length;
-      const sw = Math.min(72, (W - 40) / n), sh = 44, gap = 4;
+      // хотбар: ячейка = категория, внутри — текущий вариант и счётчик «в/из»
+      const n = E_GROUPS.length;
+      const sw = Math.min(96, (W - 40) / n), sh = 50, gap = 4;
       const x0 = W / 2 - (sw * n + gap * (n - 1)) / 2, y0 = H - sh - 14;
       for (let i = 0; i < n; i++) {
         const x = x0 + i * (sw + gap);
-        const sel = i === eSlot;
+        const sel = i === gSel;
+        const grp = E_GROUPS[i];
+        const it = grp.items[vSel[i]];
         g.fillStyle = sel ? 'rgba(232,200,64,0.2)' : 'rgba(20,10,8,0.72)';
         g.fillRect(x, y0, sw, sh);
         g.strokeStyle = sel ? '#e8c840' : '#4a2c26';
@@ -1670,10 +1772,18 @@ export const doom: MiniGame3D = {
         g.textAlign = 'left';
         g.fillStyle = sel ? '#e8c840' : '#8a6a5a';
         g.font = '10px ui-monospace, monospace';
-        if (i < 10) g.fillText(`${(i + 1) % 10}`, x + 4, y0 + 12);   // дальше — только колесом
+        g.fillText(`${(i + 1) % 10}`, x + 4, y0 + 12);
+        if (grp.items.length > 1) {
+          g.textAlign = 'right';
+          g.fillText(`${vSel[i] + 1}/${grp.items.length}`, x + sw - 4, y0 + 12);
+        }
         g.textAlign = 'center';
-        fitFont(g, E_SLOTS[i].name, sw - 6, 11, FAM);
-        g.fillText(E_SLOTS[i].name, x + sw / 2, y0 + sh - 8);
+        g.fillStyle = sel ? '#a08a60' : '#6a564a';
+        g.font = '9px ui-monospace, monospace';
+        g.fillText(grp.name, x + sw / 2, y0 + 22);
+        fitFont(g, it.name, sw - 6, 12, FAM);
+        g.fillStyle = sel ? '#e8c840' : '#9a8060';
+        g.fillText(it.name, x + sw / 2, y0 + sh - 8);
       }
 
       // подсказки
@@ -1681,8 +1791,8 @@ export const doom: MiniGame3D = {
       g.font = '11px ui-monospace, monospace';
       g.fillStyle = '#7a5a50';
       g.fillText(
-        'ЛКМ поставить · ПКМ/X убрать · 0-9/колесо слот · T поворот · WASD+SPACE/SHIFT полёт (R быстрее) · −/+ размер' +
-        ' · B небо · F пол · G тест · Q титул · K сохранить · L загрузить · N базовая · E/I экспорт/импорт',
+        'ЛКМ поставить · ПКМ/X убрать · цифра — категория (повтор листает) · колесо — все варианты · T поворот' +
+        ' · WASD+SPACE/SHIFT полёт (R быстрее) · −/+ размер · B небо · F пол · G тест · Q титул · K/L сохранить/загрузить · E/I экспорт/импорт',
         W / 2, y0 - 10,
       );
       if (eMsgT > 0) {
