@@ -30,20 +30,25 @@ export const PAL = {
   hellSky: 0x2a0a08, rune: 0xff2a10, runeHot: 0xff8a50,
 };
 
-export type PickupKind = 'med' | 'arm' | 'bul' | 'box' | 'shl';
+export type PickupKind = 'med' | 'arm' | 'bul' | 'box' | 'shl' | 'rkt' | 'launcher';
 export const PICKUP_INFO: Record<PickupKind, { name: string; give: string }> = {
   med: { name: 'АПТЕЧКА', give: '+25 здоровья' },
   arm: { name: 'БРОНЯ', give: '+35 брони' },
   bul: { name: 'ОБОЙМА', give: '+40 патронов' },
   box: { name: 'ЯЩИК ПАТРОНОВ', give: '+110 патронов (корм пулемёта)' },
   shl: { name: 'ДРОБЬ', give: '+12 дроби' },
+  rkt: { name: 'РАКЕТЫ', give: '+5 ракет (появляются с 16-й волны вместо обойм)' },
+  launcher: { name: 'РАКЕТНИЦА', give: 'сам ствол — лежит в центре арены на 16-й волне' },
 };
 
 export const WEAPONS = [
   { name: 'ПИСТОЛЕТ', dmg: 15, cd: 0.36, spread: 0.02, pellets: 1, ammo: 'bul' as const, use: 1, unlock: 'старт' },
   { name: 'ДРОБОВИК', dmg: 10, cd: 0.82, spread: 0.13, pellets: 7, ammo: 'shl' as const, use: 1, unlock: 'волна 3' },
   { name: 'ПУЛЕМЁТ', dmg: 11, cd: 0.09, spread: 0.055, pellets: 1, ammo: 'bul' as const, use: 1, unlock: 'волна 6' },
+  { name: 'РАКЕТНИЦА', dmg: 60, cd: 0.95, spread: 0, pellets: 1, ammo: 'rkt' as const, use: 1, unlock: 'волна 16 — лежит на арене' },
 ];
+/** осколочный урон ракеты: в эпицентре SPLASH, до нуля на SPLASH_R; себе — ×SELF */
+export const ROCKET = { splash: 45, radius: 4.5, self: 0.55, speed: 24, life: 3.2 };
 
 // ── монстры ───────────────────────────────────────────────────────────────
 export function buildMonster(k: MK, vet: boolean): { grp: THREE.Group; parts: THREE.Mesh[] } {
@@ -212,11 +217,22 @@ export function buildWeapon(idx: number): { grp: THREE.Group; parts: THREE.Mesh[
     add(0.13, 0.13, 0.76, 0x353b44, 0.19, -0.29, -0.88);
     add(0.2, 0.24, 0.3, 0x7a5a34, 0.19, -0.3, -0.4);
     add(0.2, 0.2, 0.15, 0x22262c, 0.19, -0.18, -1.48);
-  } else {
+  } else if (idx === 2) {
     add(0.22, 0.22, 0.9, 0x4a505a, 0.18, -0.2, -0.9);
     for (const bx of [-0.075, 0.075]) add(0.08, 0.08, 1.0, 0x353b44, 0.18 + bx, -0.2, -1.05);
     add(0.25, 0.28, 0.26, 0x353b44, 0.18, -0.33, -0.45);
     add(0.28, 0.1, 0.1, 0x5a606a, 0.18, -0.06, -0.66);
+  } else {
+    // РАКЕТНИЦА: толстая труба на плече, раструб спереди, прицельная планка
+    add(0.3, 0.3, 1.25, 0x54504a, 0.17, -0.16, -1.0);
+    add(0.4, 0.4, 0.2, 0x3c3834, 0.17, -0.16, -1.62);      // раструб
+    add(0.34, 0.34, 0.16, 0x2a2724, 0.17, -0.16, -0.42);    // казённик
+    add(0.14, 0.2, 0.3, 0x3c3834, 0.17, -0.36, -0.75);      // рукоять
+    add(0.1, 0.12, 0.5, 0x6a6258, 0.17, 0.02, -1.05);       // планка сверху
+    const warn = box(0.32, 0.08, 0.32, 0xd8541e);           // предупреждающая полоса
+    warn.position.set(0.17, -0.16, -1.5);
+    (warn.material as THREE.MeshLambertMaterial).emissive = new THREE.Color(0xd8541e).multiplyScalar(0.5);
+    grp.add(warn); parts.push(warn);
   }
   return { grp, parts };
 }
@@ -243,6 +259,26 @@ export function buildPickup(kind: PickupKind): THREE.Group {
       c.position.set(-0.3 + i * 0.2, 0.84, 0);
       grp.add(c);
     }
+  } else if (kind === 'rkt') {
+    // ящик ракет: боеголовки торчат наружу
+    const b = box(0.6, 0.26, 0.42, 0x3f4a2c); b.position.y = 0.22; grp.add(b);
+    const band = box(0.62, 0.08, 0.44, 0x2a3220); band.position.y = 0.3; grp.add(band);
+    for (const sx of [-0.17, 0.17]) {
+      const body = box(0.13, 0.34, 0.13, 0x8a8a80); body.position.set(sx, 0.5, 0); grp.add(body);
+      const head = box(0.15, 0.14, 0.15, 0xd8541e); head.position.set(sx, 0.72, 0); grp.add(head);
+      const fin = box(0.24, 0.08, 0.04, 0x5a5a52); fin.position.set(sx, 0.38, 0); grp.add(fin);
+    }
+  } else if (kind === 'launcher') {
+    // сам ствол — крупнее и с раструбом, чтобы читался издалека
+    const tube = box(0.34, 0.34, 1.5, 0x54504a); tube.position.y = 0.5; tube.rotation.y = 0.4; grp.add(tube);
+    const mouth = box(0.46, 0.46, 0.22, 0x3c3834); mouth.position.set(-0.29, 0.5, -0.69); mouth.rotation.y = 0.4; grp.add(mouth);
+    const breech = box(0.4, 0.4, 0.18, 0x2a2724); breech.position.set(0.27, 0.5, 0.64); breech.rotation.y = 0.4; grp.add(breech);
+    const grip = box(0.16, 0.26, 0.34, 0x3c3834); grip.position.set(0.05, 0.26, 0.1); grip.rotation.y = 0.4; grp.add(grip);
+    const warn = new THREE.Mesh(
+      new THREE.BoxGeometry(0.36, 0.1, 0.36),
+      new THREE.MeshStandardMaterial({ color: 0xd8541e, emissive: 0xd8541e, emissiveIntensity: 1.4, roughness: 1 }),
+    );
+    warn.position.set(-0.2, 0.5, -0.48); warn.rotation.y = 0.4; grp.add(warn);
   } else {
     const b = box(0.44, 0.3, 0.44, 0x8a3a2a); b.position.y = 0.25; grp.add(b);
     for (const sx of [-0.1, 0.1]) for (const sz of [-0.1, 0.1]) {
@@ -560,6 +596,22 @@ export function createPentagram(radius = 1.75): Pentagram {
 export function buildPentagram(radius = 1.75): { grp: THREE.Group; mats: THREE.MeshStandardMaterial[] } {
   const p = createPentagram(radius);
   return { grp: p.grp, mats: p.mats };
+}
+
+/** Снаряд ракетницы: корпус, боеголовка, стабилизаторы. Летит носом вперёд (−Z). */
+export function buildRocket(): THREE.Group {
+  const g = new THREE.Group();
+  const body = box(0.14, 0.14, 0.46, 0x9a9a90); g.add(body);
+  const head = new THREE.Mesh(
+    new THREE.BoxGeometry(0.16, 0.16, 0.14),
+    new THREE.MeshStandardMaterial({ color: 0xd8541e, emissive: 0xff5a1e, emissiveIntensity: 1.6, roughness: 1 }),
+  );
+  head.position.z = -0.28; g.add(head);
+  for (const [fx, fy] of [[0.11, 0], [-0.11, 0], [0, 0.11], [0, -0.11]] as const) {
+    const fin = box(fx ? 0.06 : 0.16, fy ? 0.06 : 0.16, 0.12, 0x5a5a52);
+    fin.position.set(fx, fy, 0.2); g.add(fin);
+  }
+  return g;
 }
 
 // ── реквизит арены ────────────────────────────────────────────────────────

@@ -39,7 +39,7 @@ function reverbIR(ctx: AudioContext, sec: number, decay: number): AudioBuffer {
 }
 
 export type SfxId =
-  | 'pistol' | 'shotgun' | 'chaingun' | 'dryClick' | 'weaponSwitch'
+  | 'pistol' | 'shotgun' | 'chaingun' | 'rocket' | 'dryClick' | 'weaponSwitch'
   | 'explosion' | 'fireball' | 'fireballHit'
   | 'gnaar' | 'boomWail' | 'kleerRattle' | 'kleerLeap' | 'bullSnort' | 'harpyFlap' | 'mechServo'
   | 'monsterPain' | 'monsterDie' | 'gib'
@@ -53,6 +53,7 @@ const SFX: Record<SfxId, SfxDef> = {
   pistol: { file: 'pistol.wav', gain: 1.66, vary: 0.06, src: 'OGA CC0 · выстрел CZ, обрезан строго по хлопку' },
   shotgun: { file: 'shotgun.wav', gain: 1.06, vary: 0.05, src: 'собран: Kenney CC0 explosionCrunch + lowFreq + лязг помпы' },
   chaingun: { file: 'chaingun.wav', gain: 0.25, vary: 0.09, src: 'OGA CC0 · выстрел SKS, только атака (обрезан по хлопку)' },
+  rocket: { file: 'rocket.wav', gain: 0.5, vary: 0.05, src: 'сгенерирован мной: щелчок запала + низкий толчок трубы + уходящий свист' },
   dryClick: { file: 'dryClick.ogg', gain: 1.3, vary: 0.03, src: 'Kenney CC0 · ui/click3' },
   weaponSwitch: { file: 'weaponSwitch.ogg', gain: 1.23, vary: 0.04, src: 'Kenney CC0 · rpg/metalLatch' },
   explosion: { file: 'explosion.wav', gain: 1.29, vary: 0.07, src: 'наш pro · mg_explode_boom' },
@@ -87,6 +88,7 @@ const SFX: Record<SfxId, SfxDef> = {
 export interface SfxInfo { id: SfxId; name: string; group: string; how: string }
 const NAMES: Record<SfxId, [string, string]> = {
   pistol: ['Пистолет', 'Оружие'], shotgun: ['Дробовик', 'Оружие'], chaingun: ['Пулемёт', 'Оружие'],
+  rocket: ['Пуск ракеты', 'Оружие'],
   dryClick: ['Сухой щелчок', 'Оружие'], weaponSwitch: ['Смена ствола', 'Оружие'],
   explosion: ['Взрыв бомбиста', 'Взрывы'], fireball: ['Пуск файербола', 'Взрывы'], fireballHit: ['Попадание файербола', 'Взрывы'],
   gnaar: ['Рык гнара', 'Монстры'], boomWail: ['Вой бомбиста', 'Монстры'], kleerRattle: ['Стук костей', 'Монстры'],

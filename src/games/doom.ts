@@ -3,7 +3,7 @@ import type { MiniGameOpts } from '../core/types';
 import { makeRng } from '../core/rng';
 import { box, type MiniGame3D, type MiniGame3DContext } from '../core/three3d';
 import { isTouchDevice, createMultiTouch, inCircle, drawButton, fitFont } from '../core/mobile';
-import { createPentagram, createEmberCloud, createDustCloud, buildMonster, buildWeapon, buildPickup, buildProp, type Pentagram } from './doomModels';
+import { createPentagram, createEmberCloud, createDustCloud, buildMonster, buildWeapon, buildPickup, buildProp, buildRocket, ROCKET, type Pentagram } from './doomModels';
 import { createDoomAudio, type SfxId, type SfxLoop } from '../core/audioDoom';
 import { createMusicDirector } from '../core/musicDirector';
 
@@ -28,6 +28,47 @@ const ARENA = 26;          // полуразмер арены
 const WALL_H = 7;
 const EYE = 1.62;
 const P_RADIUS = 0.55;
+/**
+ * СЛОЖНОСТЬ. Здоровье тварей НЕ трогаем — растёт только их напор и плотность,
+ * а лечиться становится труднее. Так игра давит темпом, а не «губками для пуль».
+ * Логика взята у первоисточников: в думе высокая сложность = больше тварей и
+ * быстрее их атаки, в сэме — ещё и заметно больше народу разом плюс ветераны.
+ */
+interface Diff {
+  key: 'norm' | 'hard' | 'core';
+  name: string; hint: string; col: string;
+  dmg: number;        // множитель урона от тварей
+  heal: number;       // множитель аптечек и брони
+  budget: number;     // множитель бюджета волны
+  cap: number;        // потолок тварей на арене
+  rate: number;       // множитель паузы между спавнами (меньше = чаще)
+  vetFrom: number;    // с какой волны идут ветераны
+  vetMax: number;     // предельная доля ветеранов
+  atk: number;        // множитель перезарядки атак твари (меньше = злее)
+  ammoMul: number;    // множитель потолков боезапаса и щедрости пикапов
+  respawn: number;    // через сколько секунд возвращается подобранное
+  breather: number;   // пауза между волнами
+  reward: number;     // множитель гонорара
+  boomAlways: boolean; // камикадзе подмешиваются в каждую волну, не только в наплывы
+}
+const DIFFS: Diff[] = [
+  {
+    key: 'norm', name: 'ЗВИЧАЙНА', hint: 'як задумано', col: '#7bd88f',
+    dmg: 1, heal: 1, budget: 1, cap: 26, rate: 1, vetFrom: 4, vetMax: 0.5,
+    atk: 1, ammoMul: 1, respawn: 14, breather: 4, reward: 1, boomAlways: false,
+  },
+  {
+    key: 'hard', name: 'ВАЖКА', hint: 'бьют больнее, аптечки скупее', col: '#e8c840',
+    dmg: 1.5, heal: 0.6, budget: 1.3, cap: 32, rate: 0.85, vetFrom: 2, vetMax: 0.65,
+    atk: 0.8, ammoMul: 1, respawn: 12, breather: 3.5, reward: 1.35, boomAlways: true,
+  },
+  {
+    key: 'core', name: 'ХАРДКОР', hint: 'месиво · патронов больше, времени нет', col: '#ff4a2a',
+    dmg: 2, heal: 0.45, budget: 1.85, cap: 44, rate: 0.55, vetFrom: 1, vetMax: 0.8,
+    atk: 0.6, ammoMul: 1.6, respawn: 8, breather: 2, reward: 1.9, boomAlways: true,
+  },
+];
+
 const BASE_REWARD = 60;
 const STEP_REWARD = 40;
 
@@ -64,14 +105,17 @@ interface Mon {
 }
 interface Gib { x: number; y: number; z: number; vx: number; vy: number; vz: number; rotX: number; rotZ: number; rx: number; rz: number; s: number; col: THREE.Color; life: number }
 interface Ball { mi: number; li: number; x: number; y: number; z: number; vx: number; vz: number; life: number }
-interface Pickup { grp: THREE.Group; kind: 'med' | 'arm' | 'bul' | 'box' | 'shl'; x: number; z: number; taken: number }
+interface Pickup { grp: THREE.Group; kind: 'med' | 'arm' | 'bul' | 'box' | 'shl' | 'rkt' | 'launcher'; x: number; z: number; taken: number }
 interface Puff { x: number; y: number; z: number; vy: number; life: number; max: number; col: THREE.Color }
 
 const WEAPONS = [
   { name: 'ПИСТОЛЕТ', dmg: 15, cd: 0.36, spread: 0.02, pellets: 1, ammo: 'bul' as const, use: 1 },
   { name: 'ДРОБОВИК', dmg: 10, cd: 0.82, spread: 0.13, pellets: 7, ammo: 'shl' as const, use: 1 },
   { name: 'ПУЛЕМЁТ', dmg: 11, cd: 0.09, spread: 0.055, pellets: 1, ammo: 'bul' as const, use: 1 },
+  { name: 'РАКЕТНИЦА', dmg: 60, cd: 0.95, spread: 0, pellets: 1, ammo: 'rkt' as const, use: 1 },
 ];
+/** волна, на которой ракетница появляется на арене (после зачистки 15-й) */
+const RKT_WAVE = 16;
 
 export const doom: MiniGame3D = {
   id: 'doom',
@@ -377,7 +421,7 @@ export const doom: MiniGame3D = {
     // ── состояние игрока ──
     let px = 0, pz = 14, yaw = 0, pitch = 0;
     let hp = 100, armor = 0;
-    const ammo = { bul: 60, shl: 0 };
+    const ammo = { bul: 60, shl: 0, rkt: 0 };
     let fireCd = 0, bob = 0, kick = 0, flashT = 0, flashCol = 0;
     // отладка: ?wave=20 стартует сразу с двадцатой, ?perf=1 включает счётчик
     const qs = new URLSearchParams(location.search);
@@ -394,7 +438,17 @@ export const doom: MiniGame3D = {
     interface Pending { pi: number; k: MK; vet: boolean; t: number }
     const pending: Pending[] = [];
     let titleSel = 0, endSel = 0;
+    // выбор запоминается между забегами
+    let diffIx = Math.max(0, DIFFS.findIndex((d) => d.key === localStorage.getItem('fw_diff')));
+    let D = DIFFS[diffIx];
+    const setDiff = (ix: number) => {
+      diffIx = (ix + DIFFS.length) % DIFFS.length;
+      D = DIFFS[diffIx];
+      try { localStorage.setItem('fw_diff', D.key); } catch { /* приватный режим */ }
+    };
     let faceLook = 0, faceLookT = 0, faceOw = 0;
+    let launcherMsg = 0;       // сколько ещё секунд показывать подсказку о ракетнице
+    let rktArmed = false;      // ствол уже выложен на арену
 
     const mons: Mon[] = [];
     const gibs: Gib[] = [];
@@ -413,6 +467,30 @@ export const doom: MiniGame3D = {
     gibMesh.count = 0;
     gibMesh.frustumCulled = false;      // границы по базовому кубу, а куски летят далеко
     ctx.scene.add(gibMesh);
+
+    // ── РАКЕТЫ ИГРОКА ──
+    // Тот же порядок, что у файерболов: пул мешей и пул света, ничего не
+    // подключается к сцене на лету (смена числа источников = пересборка программ).
+    const RKT_MAX = 8, RKT_LIGHTS = 4;
+    interface Rocket { mi: number; li: number; x: number; y: number; z: number; vx: number; vz: number; life: number }
+    const rockets: Rocket[] = [];
+    const rktMeshes: THREE.Group[] = [];
+    for (let i = 0; i < RKT_MAX; i++) {
+      const rm = buildRocket();
+      rm.visible = false;
+      ctx.scene.add(rm);
+      rktMeshes.push(rm);
+    }
+    // подсветка парящей ракетницы: живёт всегда, гасится яркостью
+    const launcherLight = new THREE.PointLight(0xffa040, 0, 12, 1.5);
+    ctx.scene.add(launcherLight);
+
+    const rktLights: THREE.PointLight[] = [];
+    for (let i = 0; i < RKT_LIGHTS; i++) {
+      const rl = new THREE.PointLight(0xffb060, 0, 9, 1.6);
+      ctx.scene.add(rl);
+      rktLights.push(rl);
+    }
 
     // Пыль — общий модуль: обычное смешивание + своя прозрачность у каждой пылинки
     const PUFF_MAX = 260;
@@ -495,8 +573,13 @@ export const doom: MiniGame3D = {
       pickups.length = 0;
       mkPickup('med', -18, -6); mkPickup('med', 18, 6);
       mkPickup('arm', 0, -19); mkPickup('arm', 0, 19);
-      mkPickup('bul', -6, -18); mkPickup('bul', 6, 18);
-      mkPickup('bul', -19, 12); mkPickup('bul', 19, -3);
+      // С 16-й волны три обоймы из четырёх меняются на ракеты: пистолет к этому
+      // моменту мёртв, но одну оставляем — из «bul» кормится ещё и пулемёт.
+      const rkt = wave >= RKT_WAVE;
+      mkPickup(rkt ? 'rkt' : 'bul', -6, -18);
+      mkPickup(rkt ? 'rkt' : 'bul', 6, 18);
+      mkPickup(rkt ? 'rkt' : 'bul', -19, 12);
+      mkPickup('bul', 19, -3);
       mkPickup('box', -21, -21); mkPickup('box', 21, 21);   // ящики для пулемёта
       mkPickup('shl', 19, -12); mkPickup('shl', -12, 4);
       mkPickup('shl', 4, -21); mkPickup('med', 12, -4);
@@ -515,6 +598,7 @@ export const doom: MiniGame3D = {
       if (e.code === 'Digit1' && owned[0]) { weapon = 0; buildGun(0); sfx.play('weaponSwitch'); }
       if (e.code === 'Digit2' && owned[1]) { weapon = 1; buildGun(1); sfx.play('weaponSwitch'); }
       if (e.code === 'Digit3' && owned[2]) { weapon = 2; buildGun(2); sfx.play('weaponSwitch'); }
+      if (e.code === 'Digit4' && owned[3]) { weapon = 3; buildGun(3); sfx.play('weaponSwitch'); }
       if (e.code === 'Space' || e.code.startsWith('Arrow')) e.preventDefault();
     };
     const onKeyUp = (e: KeyboardEvent) => keys.delete(e.code);
@@ -572,11 +656,28 @@ export const doom: MiniGame3D = {
       if (ammo[w.ammo] < w.use) { flashT = 0.12; flashCol = 1; sfx.play('dryClick'); return; }
       ammo[w.ammo] -= w.use;
       fireCd = w.cd;
-      sfx.play(weapon === 0 ? 'pistol' : weapon === 1 ? 'shotgun' : 'chaingun');
-      kick = 1;
-      muzzleLight.intensity = 4.5;
+      sfx.play(weapon === 0 ? 'pistol' : weapon === 1 ? 'shotgun' : weapon === 2 ? 'chaingun' : 'rocket');
+      kick = weapon === 3 ? 2.2 : 1;                       // ракетницу ощутимо задирает
+      muzzleLight.intensity = weapon === 3 ? 7 : 4.5;
       const sinY = Math.sin(yaw), cosY = Math.cos(yaw);
       muzzleLight.position.set(px - sinY * 1.2, EYE - 0.2, pz - cosY * 1.2);
+
+      // ── РАКЕТНИЦА: не хитскан, а снаряд ──
+      if (weapon === 3) {
+        const mi = rktMeshes.findIndex((q) => !q.visible);
+        if (mi >= 0) {
+          const li = rktLights.findIndex((q) => q.intensity === 0);
+          const rx = -sinY, rz = -cosY;
+          const sx = px + rx * 1.1, sz = pz + rz * 1.1;
+          rktMeshes[mi].position.set(sx, EYE - 0.15, sz);
+          rktMeshes[mi].rotation.set(0, yaw, 0);
+          rktMeshes[mi].visible = true;
+          if (li >= 0) { rktLights[li].position.set(sx, EYE - 0.15, sz); rktLights[li].intensity = 2.6; }
+          rockets.push({ mi, li, x: sx, y: EYE - 0.15, z: sz, vx: rx * ROCKET.speed, vz: rz * ROCKET.speed, life: ROCKET.life });
+        }
+        return;
+      }
+
       for (let p = 0; p < w.pellets; p++) {
         const sp = (rng() - 0.5) * w.spread * 2;
         const ay = yaw + sp;
@@ -612,6 +713,38 @@ export const doom: MiniGame3D = {
       }
     };
 
+    /** подрыв ракеты: осколки по площади монстрам и стрелку, если близко */
+    const rocketBlast = (bx: number, by: number, bz: number) => {
+      sfx.play('explosion', { x: bx, z: bz });
+      muzzleLight.position.set(bx, by, bz);
+      muzzleLight.intensity = 8;
+      for (let q = 0; q < 20; q++) {
+        puff(bx + (rng() - 0.5) * 2.4, by + (rng() - 0.5) * 1.8, bz + (rng() - 0.5) * 2.4,
+          q % 3 ? 0xff8030 : 0xffe090, 0.5);
+      }
+      // монстрам — от эпицентра к краю по спаду
+      for (let i = mons.length - 1; i >= 0; i--) {
+        const m = mons[i];
+        const d = Math.hypot(m.x - bx, m.z - bz);
+        if (d > ROCKET.radius) continue;
+        const k = 1 - d / ROCKET.radius;
+        m.hp -= ROCKET.splash * k;
+        m.hurtT = 0.14;
+        if (m.hp <= 0) {
+          sfx.play('monsterDie', { x: m.x, z: m.z });
+          gibify(m);
+          mons.splice(i, 1);
+          alive--; kills++; totalKills++;
+        }
+      }
+      // себе — тот же спад, но слабее; проходит через броню, как любой урон
+      const dSelf = Math.hypot(px - bx, pz - bz);
+      if (dSelf < ROCKET.radius) {
+        const k = 1 - dSelf / ROCKET.radius;
+        hurt(ROCKET.splash * ROCKET.self * k);
+      }
+    };
+
     // ── урон игроку ──
     const hurt = (dmg: number) => {
       if (phase !== 'wave' && phase !== 'clear') return;
@@ -626,21 +759,27 @@ export const doom: MiniGame3D = {
     };
 
     // ── волны ──
-    const waveReward = (n: number) => BASE_REWARD + (n - 1) * STEP_REWARD;
+    const waveReward = (n: number) => Math.round((BASE_REWARD + (n - 1) * STEP_REWARD) * D.reward);
     const startWave = () => {
       wave++;
       kills = 0;
-      waveBudget = Math.round(4 + wave * 2.4 + s01 * 2);
+      waveBudget = Math.round((4 + wave * 2.4 + s01 * 2) * D.budget);
       spawnCd = 0.4;
       phase = 'wave'; phaseT = 0;
       sfx.play('waveStart');
       music.play('main', { fade: 0.7 });
       if (wave === 3 && !owned[1]) { owned[1] = true; weapon = 1; buildGun(1); ammo.shl += 20; sfx.play('pickWeapon'); }
       if (wave === 6 && !owned[2]) { owned[2] = true; weapon = 2; buildGun(2); ammo.bul += 100; sfx.play('pickWeapon'); }
+      if (wave >= RKT_WAVE && !rktArmed) {
+        // ствол не выдаётся в руки — за ним надо сходить, под огнём
+        rktArmed = true;
+        resetPickups();                                  // три обоймы из четырёх меняются на ракеты
+        if (!owned[3]) { mkPickup('launcher', 0, -14); sfx.play('teleport', { x: 0, z: -14 }); }
+      }
     };
     const pickKind = (): MK => {
       const pool: MK[] = ['gnaar'];
-      if (wave >= 2) pool.push('boom');
+      if (wave >= 2 || D.boomAlways) pool.push('boom');
       if (wave >= 3) pool.push('kleer');
       if (wave >= 4) pool.push('harpy');
       if (wave >= 5) pool.push('bull');
@@ -661,8 +800,14 @@ export const doom: MiniGame3D = {
       puffs.length = 0; dust.commit(0);
       pending.length = 0;
       for (const p of portals) p.release(0.25);
-      hp = 100; armor = 0; ammo.bul = 60; ammo.shl = 0;
-      owned[1] = false; owned[2] = false; weapon = 0; buildGun(0);
+      hp = 100; armor = 0; ammo.bul = Math.round(60 * D.ammoMul); ammo.shl = 0;
+      owned[1] = false; owned[2] = false; owned[3] = false; weapon = 0; buildGun(0);
+      ammo.rkt = 0; launcherMsg = 0; rktArmed = false; launcherLight.intensity = 0;
+      for (const r of rockets) {
+        rktMeshes[r.mi].visible = false;
+        if (r.li >= 0) rktLights[r.li].intensity = 0;
+      }
+      rockets.length = 0;
       px = 0; pz = 14; yaw = 0; wave = startWaveAt - 1;
       resetPickups();
       music.play('main', { fade: 0.8 });
@@ -798,7 +943,9 @@ export const doom: MiniGame3D = {
         ['куски', `${gibs.length}/${GIB_MAX}`, gibs.length >= GIB_MAX],
         ['пыль', `${puffs.length}/${PUFF_MAX}`, puffs.length >= PUFF_MAX],
         ['файерболы', `${balls.length}/${BALL_MAX}`, false],
+        ['ракеты', `${rockets.length}/${RKT_MAX} · ${ammo.rkt} шт`, false],
         ['волна / бюджет', `${wave} / ${waveBudget}`, false],
+        ['сложность', `${D.name} · потолок ${D.cap}`, false],
       ];
       const pad = 8, lh = 15, w = 208;
       const h = rows.length * lh + pad * 2;
@@ -847,13 +994,20 @@ export const doom: MiniGame3D = {
         fitFont(g, 'ТРИМАЙ ПОРТ · ОПЛАТА ЗА ВІДБИТУ ХВИЛЮ', W * 0.8, 15, FAM);
         g.fillStyle = '#c88a5a';
         g.fillText('ТРИМАЙ ПОРТ · ОПЛАТА ЗА ВІДБИТУ ХВИЛЮ', W / 2, H * 0.24 + 34);
-        const items = ['НОВА ГРА', 'ВИЙТИ'];
+        const items = ['НОВА ГРА', `СКЛАДНІСТЬ: ${D.name}`, 'ВИЙТИ'];
         for (let i = 0; i < items.length; i++) {
-          const yy = H * 0.5 + i * 52;
+          const yy = H * 0.5 + i * 58;
           const on = i === titleSel;
-          fitFont(g, items[i], W * 0.5, 30, FAM);
-          g.fillStyle = on ? '#e8c840' : '#8a5a4a';
+          fitFont(g, items[i], W * 0.5, i === 1 ? 24 : 30, FAM);
+          g.fillStyle = i === 1 ? (on ? D.col : '#7a5a4a') : on ? '#e8c840' : '#8a5a4a';
           g.fillText(items[i], W / 2, yy);
+          if (i === 1) {                       // подсказка под строкой сложности
+            g.save();
+            fitFont(g, `← → ${D.hint}`, W * 0.6, 12, FAM);
+            g.fillStyle = '#7a5a50';
+            g.fillText(`← → ${D.hint}`, W / 2, yy + 17);
+            g.restore();
+          }
           if (on) {
             // курсор-череп слева
             const sx = W / 2 - Math.min(W * 0.25, 150), sy = yy - 10;
@@ -868,6 +1022,18 @@ export const doom: MiniGame3D = {
         g.fillText(mob ? 'ТАП ПО ПУНКТУ' : '↑↓ ВЫБОР · ENTER / SPACE — СТАРТ', W / 2, H * 0.82);
         g.textAlign = 'left';
         return;
+      }
+
+      // «РАКЕТНИЦА» — короткая плашка сразу после подбора
+      if (launcherMsg > 0 && (phase === 'wave' || phase === 'clear')) {
+        g.textAlign = 'center';
+        fitFont(g, 'РАКЕТНИЦА — КЛАВИША 4', W * 0.7, 26, FAM);
+        g.fillStyle = '#ff8a30';
+        g.fillText('РАКЕТНИЦА — КЛАВИША 4', W / 2, H * 0.34);
+        fitFont(g, 'ОСКОЛКИ БЬЮТ И ПО ТЕБЕ — НЕ СТРЕЛЯЙ В УПОР', W * 0.7, 14, FAM);
+        g.fillStyle = '#c88a5a';
+        g.fillText('ОСКОЛКИ БЬЮТ И ПО ТЕБЕ — НЕ СТРЕЛЯЙ В УПОР', W / 2, H * 0.34 + 24);
+        g.textAlign = 'left';
       }
 
       if (showPerf) drawPerf();
@@ -888,10 +1054,11 @@ export const doom: MiniGame3D = {
 
       // ── панель оружия сверху: все стволы всегда видны, отмечен выбранный ──
       {
-        const sw = Math.min(112, W * 0.16), sh = 46, gap = 8;
-        const total = sw * 3 + gap * 2;
+        const slots = owned[3] ? 4 : 3;                 // четвёртый появляется вместе со стволом
+        const sw = Math.min(112, W * (slots === 4 ? 0.135 : 0.16)), sh = 46, gap = 8;
+        const total = sw * slots + gap * (slots - 1);
         const x0 = W / 2 - total / 2, y1 = 12;
-        for (let i = 0; i < 3; i++) {
+        for (let i = 0; i < slots; i++) {
           const x = x0 + i * (sw + gap);
           const has = owned[i], sel = i === weapon;
           g.fillStyle = sel ? 'rgba(232,200,64,0.16)' : 'rgba(20,10,8,0.55)';
@@ -915,11 +1082,16 @@ export const doom: MiniGame3D = {
             g.fillRect(ix - 20, iy - 3, 32, 5);
             g.fillRect(ix - 20, iy + 2, 26, 3);
             g.fillRect(ix + 8, iy + 1, 9, 7);
-          } else {                             // пулемёт
+          } else if (i === 2) {                // пулемёт
             g.fillRect(ix - 20, iy - 4, 28, 4);
             g.fillRect(ix - 20, iy + 1, 28, 4);
             g.fillRect(ix + 6, iy - 6, 8, 13);
             g.fillRect(ix - 6, iy + 6, 8, 6);
+          } else {                             // ракетница: труба с раструбом
+            g.fillRect(ix - 18, iy - 5, 30, 10);
+            g.fillRect(ix - 23, iy - 7, 6, 14);
+            g.fillRect(ix + 12, iy - 4, 6, 8);
+            g.fillRect(ix - 6, iy + 5, 7, 6);
           }
           // патроны этого ствола
           g.textAlign = 'center';
@@ -952,6 +1124,13 @@ export const doom: MiniGame3D = {
       if (phase === 'wave' && phaseT < 2) {
         g.textAlign = 'center';
         const t1 = wave % 5 === 0 ? `ВОЛНА ${wave} — НАПЛЫВ БОМБИСТОВ!` : `ВОЛНА ${wave}`;
+        if (D.key !== 'norm') {                       // на какой сложности идёт забег
+          g.save();
+          fitFont(g, D.name, ctx.width * 0.4, 15, FAM);
+          g.fillStyle = D.col;
+          g.fillText(D.name, ctx.width / 2, ctx.height * 0.2);
+          g.restore();
+        }
         fitFont(g, t1, W * 0.86, 40, FAM);
         g.save();
         g.shadowColor = 'rgba(255,80,20,0.9)'; g.shadowBlur = 20;
@@ -1141,8 +1320,8 @@ export const doom: MiniGame3D = {
         }
         for (const p of touch.started) {
           if (inCircle(p.x, p.y, L.wpn.x, L.wpn.y, L.wpn.r * 1.3)) {
-            for (let i = 1; i <= 3; i++) {
-              const nx = (weapon + i) % 3;
+            for (let i = 1; i <= 4; i++) {
+              const nx = (weapon + i) % 4;
               if (owned[nx]) { weapon = nx; buildGun(nx); break; }
             }
           }
@@ -1168,19 +1347,27 @@ export const doom: MiniGame3D = {
           menuMusicOn = true;
           music.play('chill', { fade: 1.8 });
         }
-        if (upEdge || downEdge) { titleSel = (titleSel + 1) % 2; sfx.play('menuMove'); }
+        if (upEdge || downEdge) { titleSel = (titleSel + (downEdge ? 1 : 2)) % 3; sfx.play('menuMove'); }
+        if (titleSel === 1 && lrEdge !== 0) { setDiff(diffIx + (lrEdge > 0 ? 1 : -1)); sfx.play('menuMove'); }
         const startNow = enterEdge || keys.has('Space') || (mob && pdEdge);
         if (startNow) {
           if (mob && pdEdge) {
-            // тап по пункту
-            const yy0 = ctx.height * 0.5, yy1 = ctx.height * 0.5 + 52;
+            // тап по пункту: берём ближайшую строку из трёх
             const ty = ctx.input.pointer.y;
-            titleSel = Math.abs(ty - yy1) < Math.abs(ty - yy0) ? 1 : 0;
+            let best = 0, bestD = 1e9;
+            for (let i = 0; i < 3; i++) {
+              const d = Math.abs(ty - (ctx.height * 0.5 + i * 58));
+              if (d < bestD) { bestD = d; best = i; }
+            }
+            titleSel = best;
           }
           sfx.play('menuSelect');
-          if (titleSel === 1) { cleanup(); ctx.finish({ success: false, score: 0 }); return; }
-          music.play('main', { fade: 1.4 });   // из chill в бой с наложением
-          startWave();
+          if (titleSel === 1) { setDiff(diffIx + 1); }        // строка сложности — перебор
+          else if (titleSel === 2) { cleanup(); ctx.finish({ success: false, score: 0 }); return; }
+          else {
+            music.play('main', { fade: 1.4 });   // из chill в бой с наложением
+            startWave();
+          }
         }
         // камера уезжает к диораме: в кадре только черепа и столбы искр
         menuRig.visible = true;
@@ -1253,10 +1440,14 @@ export const doom: MiniGame3D = {
         // спавн
         if (waveBudget > 0) {
           spawnCd -= dt;
-          if (spawnCd <= 0 && mons.length + pending.length < 26) {
+          if (spawnCd <= 0 && mons.length + pending.length < D.cap) {
             const rush = wave % 5 === 0;
-            const k: MK = rush && rng() < 0.75 ? 'boom' : pickKind();
-            const vet = wave > 3 && rng() < Math.min(0.5, 0.08 * (wave - 3));
+            // в наплыв — почти сплошь камикадзе; на высоких сложностях они
+            // подмешиваются и в обычные волны, как в сэме
+            const k: MK = rush && rng() < 0.75 ? 'boom'
+              : D.boomAlways && rng() < (D.key === 'core' ? 0.3 : 0.18) ? 'boom'
+                : pickKind();
+            const vet = wave >= D.vetFrom && rng() < Math.min(D.vetMax, 0.08 * (wave - D.vetFrom + 1));
             // печать, которая сейчас не занята другим заказом
             const free: number[] = [];
             for (let i = 0; i < SPAWNS.length; i++) if (!pending.some((q) => q.pi === i)) free.push(i);
@@ -1265,7 +1456,7 @@ export const doom: MiniGame3D = {
             sfx.play('teleport', { x: SPAWNS[pi][0], z: SPAWNS[pi][1] });
             pending.push({ pi, k, vet, t: SPAWN_LEAD });
             waveBudget -= MDEFS[k].cost;
-            spawnCd = Math.max(0.25, (rush ? 0.4 : 0.85) - wave * 0.02);
+            spawnCd = Math.max(0.15, ((rush ? 0.4 : 0.85) - wave * 0.02) * D.rate);
           }
         } else if (mons.length === 0 && pending.length === 0) {
           money += waveReward(wave);
@@ -1274,7 +1465,7 @@ export const doom: MiniGame3D = {
           phase = 'clear'; phaseT = 0;
         }
       } else if (phase === 'clear') {
-        if (phaseT > 4) startWave();
+        if (phaseT > D.breather) startWave();
       }
 
       // ── созревшие печати выпускают монстра, голограмма гаснет за секунду ──
@@ -1382,7 +1573,7 @@ export const doom: MiniGame3D = {
           } else if (dist > 14) { m.x += ux * spd * dt; m.z += uz * spd * dt; }
           else if (dist < 8) { m.x -= ux * spd * 0.6 * dt; m.z -= uz * spd * 0.6 * dt; }
           if (!covered && m.atkCd <= 0 && dist < 24) {
-            m.atkCd = 2.4 - Math.min(1.2, wave * 0.05);
+            m.atkCd = (2.4 - Math.min(1.2, wave * 0.05)) * D.atk;
             sfx.play('fireball', { x: m.x, z: m.z });
             for (const sx of [-0.72, 0.72]) {
               const mi = ballMeshes.findIndex((q) => !q.visible);
@@ -1456,7 +1647,7 @@ export const doom: MiniGame3D = {
             muzzleLight.position.set(m.x, 1.4, m.z);
             muzzleLight.intensity = 7;
             sfx.play('explosion', { x: m.x, z: m.z });
-            hurt((d.explode ?? 20) * (m.vet ? 1.4 : 1));
+            hurt((d.explode ?? 20) * (m.vet ? 1.4 : 1) * D.dmg);
             gibify(m); mons.splice(i, 1); alive--; totalKills++;
             continue;
           }
@@ -1464,16 +1655,41 @@ export const doom: MiniGame3D = {
             // задевает ТОЛЬКО в прыжке и только раз за прыжок — потом пролетает насквозь
             if (m.state === 'leap' && !m.hitThisLeap) {
               m.hitThisLeap = true;
-              hurt(d.melee * (m.vet ? 1.35 : 1));
+              hurt(d.melee * (m.vet ? 1.35 : 1) * D.dmg);
             }
           } else if (m.atkCd <= 0) {
-            m.atkCd = m.kind === 'bull' ? 1.4 : 0.75;
-            hurt(d.melee * (m.vet ? 1.35 : 1));
+            m.atkCd = (m.kind === 'bull' ? 1.4 : 0.75) * D.atk;
+            hurt(d.melee * (m.vet ? 1.35 : 1) * D.dmg);
             const kb = m.kind === 'bull' ? 0.85 : 0.3;
             [px, pz] = collide(px + ux * kb, pz + uz * kb, P_RADIUS);   // откидывает игрока
             m.x -= ux * 0.5; m.z -= uz * 0.5;                            // и сам отшатывается
             if (m.kind === 'bull') m.state = 'walk';
           }
+        }
+      }
+
+      // ── ракеты игрока ──
+      for (let i = rockets.length - 1; i >= 0; i--) {
+        const r = rockets[i];
+        r.life -= dt;
+        r.x += r.vx * dt; r.z += r.vz * dt;
+        const rm = rktMeshes[r.mi];
+        rm.position.set(r.x, r.y, r.z);
+        if (r.li >= 0) rktLights[r.li].position.set(r.x, r.y, r.z);
+        if (rng() < dt * 40) puff(r.x, r.y, r.z, 0xff9040, 0.22);       // дымный след
+
+        // попадание: тварь, пилон, стена или конец жизни
+        let hitMon = false;
+        for (const m of mons) {
+          const mr = MDEFS[m.kind].radius + 0.35;
+          if (Math.hypot(m.x - r.x, m.z - r.z) < mr && Math.abs((m.y + 0.9) - r.y) < 1.6) { hitMon = true; break; }
+        }
+        const hitWall = inPillar(r.x, r.z, 0.2) || Math.abs(r.x) > ARENA || Math.abs(r.z) > ARENA;
+        if (hitMon || hitWall || r.life <= 0) {
+          rocketBlast(r.x, r.y, r.z);
+          rm.visible = false;
+          if (r.li >= 0) rktLights[r.li].intensity = 0;
+          rockets.splice(i, 1);
         }
       }
 
@@ -1491,7 +1707,7 @@ export const doom: MiniGame3D = {
         // пилон высотой 5 м — файербол летит на 1.7 м, значит гасится о него
         const hitWall = inPillar(b.x, b.z, 0.22) || Math.abs(b.x) > ARENA || Math.abs(b.z) > ARENA;
         if (hitP || hitWall || b.life <= 0) {
-          if (hitP) { sfx.play('fireballHit', { x: b.x, z: b.z }); hurt(13); for (let q = 0; q < 8; q++) puff(b.x, b.y, b.z, 0xff8030, 0.35); }
+          if (hitP) { sfx.play('fireballHit', { x: b.x, z: b.z }); hurt(13 * D.dmg); for (let q = 0; q < 8; q++) puff(b.x, b.y, b.z, 0xff8030, 0.35); }
           else if (hitWall) {
             sfx.play('fireballHit', { x: b.x, z: b.z });
             for (let q = 0; q < 6; q++) puff(b.x, b.y + (rng() - 0.5) * 0.5, b.z, 0xff8030, 0.3);
@@ -1509,18 +1725,46 @@ export const doom: MiniGame3D = {
           if (p.taken <= 0) { p.grp.visible = true; }
           continue;
         }
-        p.grp.rotation.y += dt * 1.6;
-        p.grp.position.y = 0.1 + Math.sin(time * 2.5 + p.x) * 0.12;
+        p.grp.rotation.y += dt * (p.kind === 'launcher' ? 0.9 : 1.6);
+        p.grp.position.y = p.kind === 'launcher'
+          ? 0.75 + Math.sin(time * 1.7) * 0.22          // ствол парит заметно выше
+          : 0.1 + Math.sin(time * 2.5 + p.x) * 0.12;
+        if (p.kind === 'launcher') {
+          // столб искр снизу вверх — чтобы находилась через всю арену
+          if (rng() < dt * 26) {
+            const a = rng() * Math.PI * 2, rr = 0.3 + rng() * 0.6;
+            puff(p.x + Math.cos(a) * rr, 0.1 + rng() * 0.3, p.z + Math.sin(a) * rr, 0xffb060, 0.55);
+          }
+          launcherLight.position.set(p.x, p.grp.position.y + 0.4, p.z);
+          launcherLight.intensity = 2.4 + 0.9 * Math.sin(time * 3.1);
+        }
         if (Math.hypot(p.x - px, p.z - pz) < 1.2) {
           let got = false;
-          if (p.kind === 'med' && hp < 100) { hp = Math.min(100, hp + 25); got = true; }
-          if (p.kind === 'arm' && armor < 100) { armor = Math.min(100, armor + 35); got = true; }
-          if (p.kind === 'bul' && ammo.bul < 300) { ammo.bul = Math.min(300, ammo.bul + 40); got = true; }
-          if (p.kind === 'box' && ammo.bul < 300) { ammo.bul = Math.min(300, ammo.bul + 110); got = true; }
-          if (p.kind === 'shl' && ammo.shl < 80) { ammo.shl = Math.min(80, ammo.shl + 12); got = true; }
+          const capB = Math.round(300 * D.ammoMul), capS = Math.round(80 * D.ammoMul), capR = Math.round(30 * D.ammoMul);
+          const heal = (v: number) => Math.max(1, Math.round(v * D.heal));
+          const more = (v: number) => Math.round(v * D.ammoMul);
+          if (p.kind === 'med' && hp < 100) { hp = Math.min(100, hp + heal(25)); got = true; }
+          if (p.kind === 'arm' && armor < 100) { armor = Math.min(100, armor + heal(35)); got = true; }
+          if (p.kind === 'bul' && ammo.bul < capB) { ammo.bul = Math.min(capB, ammo.bul + more(40)); got = true; }
+          if (p.kind === 'box' && ammo.bul < capB) { ammo.bul = Math.min(capB, ammo.bul + more(110)); got = true; }
+          if (p.kind === 'shl' && ammo.shl < capS) { ammo.shl = Math.min(capS, ammo.shl + more(12)); got = true; }
+          if (p.kind === 'rkt' && ammo.rkt < capR) { ammo.rkt = Math.min(capR, ammo.rkt + more(5)); got = true; }
+          if (p.kind === 'launcher' && !owned[3]) {
+            owned[3] = true; weapon = 3; buildGun(3);
+            ammo.rkt = Math.max(ammo.rkt, 10);
+            launcherMsg = 3.5; got = true;
+            launcherLight.intensity = 0;
+          }
           if (got) {
-            p.taken = 14; p.grp.visible = false;
-            sfx.play(p.kind === 'med' ? 'pickHealth' : p.kind === 'arm' ? 'pickArmor' : 'pickAmmo', { x: p.x, z: p.z });
+            // ствол подбирается насовсем, боеприпасы возвращаются через 14 с
+            p.taken = p.kind === 'launcher' ? 1e9 : D.respawn;
+            p.grp.visible = false;
+            sfx.play(
+              p.kind === 'launcher' ? 'pickWeapon'
+                : p.kind === 'med' ? 'pickHealth'
+                  : p.kind === 'arm' ? 'pickArmor' : 'pickAmmo',
+              { x: p.x, z: p.z },
+            );
             flashT = 0.18; flashCol = 1;
             for (let q = 0; q < 5; q++) puff(p.x, 0.6, p.z, 0xffe090, 0.3);
           }
@@ -1563,6 +1807,8 @@ export const doom: MiniGame3D = {
         dust.put(i, p.x, p.y, p.z, 1 + k * 1.8, p.col, 0.85 * (1 - k));   // раздувается, как и раньше
       }
       dust.commit(puffs.length);
+
+      if (launcherMsg > 0) launcherMsg -= dt;
 
       // ── лицо: зыркает по сторонам ──
       faceLookT -= dt;
