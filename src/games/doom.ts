@@ -729,8 +729,8 @@ export const doom: MiniGame3D = {
       }
     };
 
-    /** подрыв ракеты: осколки по площади монстрам и стрелку, если близко */
-    const rocketBlast = (bx: number, by: number, bz: number) => {
+    /** подрыв ракеты: прямое попадание по цели + осколки по площади и стрелку */
+    const rocketBlast = (bx: number, by: number, bz: number, direct?: Mon) => {
       sfx.play('explosion', { x: bx, z: bz });
       muzzleLight.position.set(bx, by, bz);
       muzzleLight.intensity = 8;
@@ -738,10 +738,13 @@ export const doom: MiniGame3D = {
         puff(bx + (rng() - 0.5) * 2.4, by + (rng() - 0.5) * 1.8, bz + (rng() - 0.5) * 2.4,
           q % 3 ? 0xff8030 : 0xffe090, 0.5);
       }
-      // монстрам — от эпицентра к краю по спаду
+      // тому, в кого воткнулась ракета, — полные 60 прямого урона ДО осколков
+      if (direct) direct.hp -= WEAPONS[3].dmg;
+      // осколки — по спаду от ЭПИЦЕНТРА ДО КРАЯ твари: взрыв происходит на её
+      // границе, и если мерить до центра, цель в упор получала бы 33 вместо 45
       for (let i = mons.length - 1; i >= 0; i--) {
         const m = mons[i];
-        const d = Math.hypot(m.x - bx, m.z - bz);
+        const d = Math.max(0, Math.hypot(m.x - bx, m.z - bz) - MDEFS[m.kind].radius);
         if (d > ROCKET.radius) continue;
         const k = 1 - d / ROCKET.radius;
         m.hp -= ROCKET.splash * k;
@@ -1715,14 +1718,14 @@ export const doom: MiniGame3D = {
         if (rng() < dt * 40) puff(r.x, r.y, r.z, 0xff9040, 0.22);       // дымный след
 
         // попадание: тварь, пилон, стена или конец жизни
-        let hitMon = false;
+        let hitMon: Mon | null = null;
         for (const m of mons) {
           const mr = MDEFS[m.kind].radius + 0.35;
-          if (Math.hypot(m.x - r.x, m.z - r.z) < mr && Math.abs((m.y + 0.9) - r.y) < 1.6) { hitMon = true; break; }
+          if (Math.hypot(m.x - r.x, m.z - r.z) < mr && Math.abs((m.y + 0.9) - r.y) < 1.6) { hitMon = m; break; }
         }
         const hitWall = inPillar(r.x, r.z, 0.2) || Math.abs(r.x) > ARENA || Math.abs(r.z) > ARENA;
         if (hitMon || hitWall || r.life <= 0) {
-          rocketBlast(r.x, r.y, r.z);
+          rocketBlast(r.x, r.y, r.z, hitMon ?? undefined);
           rm.visible = false;
           if (r.li >= 0) rktLights[r.li].intensity = 0;
           rockets.splice(i, 1);
