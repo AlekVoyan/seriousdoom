@@ -168,6 +168,46 @@ export const doom: MiniGame3D = {
       return spr;
     })();
 
+    // ── БАГРОВЫЙ КУПОЛ (небо «КВЕЙК»): тёмный верх, огненный горизонт, хмары ──
+    const skyDome = (() => {
+      const c = document.createElement('canvas');
+      c.width = 512; c.height = 256;
+      const g2 = c.getContext('2d')!;
+      const grad = g2.createLinearGradient(0, 0, 0, 256);
+      grad.addColorStop(0, '#12040a');
+      grad.addColorStop(0.42, '#4a0c0a');
+      grad.addColorStop(0.72, '#8e1c0c');
+      grad.addColorStop(0.86, '#d84416');
+      grad.addColorStop(1, '#e85a1e');
+      g2.fillStyle = grad;
+      g2.fillRect(0, 0, 512, 256);
+      // тучи: тёмные рваные пятна, нарисованные с горизонтальным заворотом
+      let hsh = 1234567;
+      const rnd = () => { hsh = (hsh * 1103515245 + 12345) & 0x7fffffff; return hsh / 0x7fffffff; };
+      for (let i = 0; i < 90; i++) {
+        const cx = rnd() * 512, cy = rnd() * rnd() * 190;
+        const rx = 26 + rnd() * 80, ry = 7 + rnd() * 18;
+        const dark = rnd() < 0.72;
+        g2.fillStyle = dark
+          ? `rgba(16,3,6,${(0.10 + rnd() * 0.22).toFixed(3)})`
+          : `rgba(214,70,22,${(0.08 + rnd() * 0.14).toFixed(3)})`;
+        for (const off of [-512, 0, 512]) {
+          g2.beginPath();
+          g2.ellipse(cx + off, cy, rx, ry, 0, 0, Math.PI * 2);
+          g2.fill();
+        }
+      }
+      const tex = new THREE.CanvasTexture(c);
+      tex.wrapS = THREE.RepeatWrapping;
+      const dome = new THREE.Mesh(
+        new THREE.SphereGeometry(190, 28, 14),
+        new THREE.MeshBasicMaterial({ map: tex, side: THREE.BackSide, fog: false, depthWrite: false }),
+      );
+      dome.visible = false;
+      ctx.scene.add(dome);
+      return dome;
+    })();
+
     /** небо арены: фон, туман и базовый свет; титул всегда адский */
     const applySky = (sky: ArenaDef['sky']) => {
       const cfg = sky === 'day'
@@ -187,6 +227,7 @@ export const doom: MiniGame3D = {
       });
       hellFill.intensity = cfg.fill;
       sunSprite.visible = sky === 'day';
+      skyDome.visible = sky === 'void';
     };
 
     // ── АРЕНА ──
@@ -247,15 +288,31 @@ export const doom: MiniGame3D = {
     let ARENA = A.size;   // полуразмер: обновляется при пересборке арены
 
     // всё строится в buildArenaLive: размер арены теперь часть ArenaDef
-    interface Pillar { x: number; z: number; r: number; rz: number; kind: 'block' | 'obelisk' | 'wall' | 'pyramid' | 'rubble' | 'column' | 'steps' | 'rock' }
+    interface Pillar { x: number; z: number; r: number; rz: number; kind: 'block' | 'obelisk' | 'wall' | 'pyramid' | 'rubble' | 'column' | 'steps' | 'rock' | 'statue' }
+    /** проходимая платформа: на неё можно зайти, край — пандус-«ступеньки» */
+    interface Dais { x: number; z: number; rx: number; rz: number; h: number }
     interface Torch { light: THREE.PointLight; flame: THREE.Mesh; ph: number }
     let pillars: Pillar[] = [];
+    let daises: Dais[] = [];
     let torches: Torch[] = [];
     let portals: Pentagram[] = [];
     let portalLights: THREE.PointLight[] = [];
     let SPAWNS: [number, number][] = [];
     let arenaGrp: THREE.Group | null = null;    // запечённые пилоны и стойки факелов
     let arenaBits: THREE.Object3D[] = [];       // пламя, света, печати, черепа
+
+    /** высота пола в точке: платформы поднимают, край — плавный подъём ~1 м */
+    const groundY = (x: number, z: number): number => {
+      let y = 0;
+      for (const d of daises) {
+        const inX = d.rx - Math.abs(x - d.x);
+        const inZ = d.rz - Math.abs(z - d.z);
+        if (inX <= 0 || inZ <= 0) continue;
+        const k = Math.min(1, Math.min(inX, inZ) / 1.1);
+        y = Math.max(y, d.h * k);
+      }
+      return y;
+    };
 
     const buildArenaLive = (def: ArenaDef) => {
       ARENA = def.size;
@@ -275,8 +332,11 @@ export const doom: MiniGame3D = {
           else if (ground === 'sand_road' && Math.abs(cx) < TS) col = ROAD[(((ix + iz) % 2) + 2) % 2];
           else {
             const STONE = [0x4c4238, 0x554a40, 0x453c34, 0x5c5046];
+            const COBBLE = [0x4a3440, 0x543a46, 0x412f3a, 0x5a4050];
             const h = Math.abs((ix * 73856093) ^ (iz * 19349663));
-            col = ground === 'stone' ? STONE[h % STONE.length] : SAND[h % SAND.length];
+            col = ground === 'stone' ? STONE[h % STONE.length]
+              : ground === 'cobble' ? COBBLE[h % COBBLE.length]
+                : SAND[h % SAND.length];
           }
           const t = box(TS - 0.06, 0.3, TS - 0.06, col);
           t.position.set(cx, -0.15, iz * TS + TS / 2);
@@ -312,7 +372,19 @@ export const doom: MiniGame3D = {
         ctx.scene.add(lava);
         arenaBits.push(lava);
       }
-      pillars = def.pillars.map((p) => ({ x: p.x, z: p.z, r: p.r, rz: p.rz ?? p.r, kind: p.kind ?? 'block' }));
+      pillars = def.pillars
+        .filter((p) => p.kind !== 'dais')
+        .map((p) => ({ x: p.x, z: p.z, r: p.r, rz: p.rz ?? p.r, kind: (p.kind ?? 'block') as Pillar['kind'] }));
+      daises = def.pillars
+        .filter((p) => p.kind === 'dais')
+        .map((p) => ({ x: p.x, z: p.z, rx: p.r, rz: p.rz ?? p.r, h: 0.9 }));
+      // платформы: ржавый верх и две ступеньки-юбки по периметру
+      for (const d of daises) {
+        const s1 = box(d.rx * 2 + 1.0, 0.3, d.rz * 2 + 1.0, 0x6a3416); s1.position.set(d.x, 0.15, d.z); varG.add(s1);
+        const s2 = box(d.rx * 2 + 0.5, 0.3, d.rz * 2 + 0.5, 0x84421c); s2.position.set(d.x, 0.45, d.z); varG.add(s2);
+        const top = box(d.rx * 2, 0.34, d.rz * 2, 0xa04c1e); top.position.set(d.x, 0.73, d.z); varG.add(top);
+        const trim = box(d.rx * 2 - 1.2, 0.06, d.rz * 2 - 1.2, 0x7a3a18); trim.position.set(d.x, 0.93, d.z); varG.add(trim);
+      }
       for (const p of pillars) {
         if (p.kind === 'obelisk') {
           // гранёный обелиск: ступени сужаются, наверху пирамидка
@@ -349,6 +421,25 @@ export const doom: MiniGame3D = {
               varG.add(st);
             }
           }
+        } else if (p.kind === 'statue') {
+          // пьедестал
+          const pb = box(p.r * 2 + 0.4, 0.5, p.rz * 2 + 0.4, 0x3a2620); pb.position.set(p.x, 0.25, p.z); varG.add(pb);
+          const pd = box(p.r * 2, 1.7, p.rz * 2, 0x4c3228); pd.position.set(p.x, 1.35, p.z); varG.add(pd);
+          const pc = box(p.r * 2 + 0.3, 0.3, p.rz * 2 + 0.3, 0x3a2620); pc.position.set(p.x, 2.35, p.z); varG.add(pc);
+          // костяная фигура: ноги, торс, голова, левая рука вскинута вверх
+          const B = 0xd8d2c0, BD = 0xb8b2a0;
+          const put = (w: number, h: number, dd: number, c: number, ox: number, oy: number, oz: number) => {
+            const m = box(w, h, dd, c); m.position.set(p.x + ox, 2.5 + oy, p.z + oz); varG.add(m);
+          };
+          put(0.34, 0.9, 0.4, BD, -0.28, 0.45, 0);      // ноги
+          put(0.34, 0.9, 0.4, BD, 0.28, 0.45, 0);
+          put(1.0, 1.1, 0.55, B, 0, 1.45, 0);           // торс
+          put(0.3, 0.8, 0.34, B, -0.62, 1.5, 0);        // правая рука вниз
+          put(0.3, 0.7, 0.34, B, 0.62, 1.85, 0);        // левое плечо вверх
+          put(0.26, 0.8, 0.3, B, 0.62, 2.55, 0);        // левая рука вскинута
+          put(0.3, 0.24, 0.3, BD, 0.62, 3.05, 0);       // кулак
+          put(0.5, 0.5, 0.45, B, 0, 2.3, 0);            // голова
+          put(0.5, 0.14, 0.2, BD, 0, 2.06, -0.2);       // челюсть
         } else if (p.kind === 'rock') {
           // валуны: пара серых глыб
           let hsh = Math.abs(Math.round(p.x * 53 + p.z * 29)) + 3;
@@ -447,7 +538,7 @@ export const doom: MiniGame3D = {
       portalLights = [];
       for (const [spx, spz] of SPAWNS) {
         const pent = createPentagram(1.75);
-        pent.grp.position.set(spx, 0, spz);
+        pent.grp.position.set(spx, groundY(spx, spz), spz);
         pent.grp.rotation.y = rng() * Math.PI * 2;
         ctx.scene.add(pent.grp);
         arenaBits.push(pent.grp);
@@ -646,6 +737,7 @@ export const doom: MiniGame3D = {
 
     // ── состояние игрока ──
     let px = A.start.x, pz = A.start.z, yaw = 0, pitch = 0;
+    let pY = 0;   // высота пола под игроком (платформы)
     let hp = 100, armor = 0;
     const ammo = { bul: 60, shl: 0, rkt: 0 };
     let fireCd = 0, bob = 0, kick = 0, flashT = 0, flashCol = 0;
@@ -860,9 +952,10 @@ export const doom: MiniGame3D = {
         if (e.code === 'KeyF') {
           eDef.ground = eDef.ground === 'sand' ? 'sand_road'
             : eDef.ground === 'sand_road' ? 'stone'
-              : eDef.ground === 'stone' ? 'checker' : 'sand';
+              : eDef.ground === 'stone' ? 'cobble'
+                : eDef.ground === 'cobble' ? 'checker' : 'sand';
           rebuildEditor();
-          eSay(`ПОЛ: ${eDef.ground === 'checker' ? 'ШАХМАТКА' : eDef.ground === 'sand' ? 'ПЕСОК' : eDef.ground === 'sand_road' ? 'ПЕСОК + ДОРОГА' : 'КАМЕНЬ'}`);
+          eSay(`ПОЛ: ${eDef.ground === 'checker' ? 'ШАХМАТКА' : eDef.ground === 'sand' ? 'ПЕСОК' : eDef.ground === 'sand_road' ? 'ПЕСОК + ДОРОГА' : eDef.ground === 'stone' ? 'КАМЕНЬ' : 'БРУСЧАТКА'}`);
           return;
         }
         if (e.code === 'KeyG') { testPlayFromEditor(); return; }
@@ -912,7 +1005,7 @@ export const doom: MiniGame3D = {
           eDef.sky = eDef.sky === 'hell' ? 'dusk' : eDef.sky === 'dusk' ? 'day' : eDef.sky === 'day' ? 'void' : 'hell';
           applySky(eDef.sky);
           eSaveLocal();
-          eSay(`НЕБО: ${eDef.sky === 'hell' ? 'ПЕКЛО' : eDef.sky === 'dusk' ? 'ЗАКАТ' : eDef.sky === 'day' ? 'ДЕНЬ' : 'ЧЕРНОТА'}`);
+          eSay(`НЕБО: ${eDef.sky === 'hell' ? 'ПЕКЛО' : eDef.sky === 'dusk' ? 'ЗАКАТ' : eDef.sky === 'day' ? 'ДЕНЬ' : 'КВЕЙК'}`);
           return;
         }
         if (e.code === 'KeyK') {
@@ -1061,11 +1154,11 @@ export const doom: MiniGame3D = {
           const li = rktLights.findIndex((q) => q.intensity === 0);
           const rx = -sinY, rz = -cosY;
           const sx = px + rx * 1.1, sz = pz + rz * 1.1;
-          rktMeshes[mi].position.set(sx, EYE - 0.15, sz);
+          rktMeshes[mi].position.set(sx, EYE + pY - 0.15, sz);
           rktMeshes[mi].rotation.set(0, yaw, 0);
           rktMeshes[mi].visible = true;
           if (li >= 0) { rktLights[li].position.set(sx, EYE - 0.15, sz); rktLights[li].intensity = 2.6; }
-          rockets.push({ mi, li, x: sx, y: EYE - 0.15, z: sz, vx: rx * ROCKET.speed, vz: rz * ROCKET.speed, life: ROCKET.life });
+          rockets.push({ mi, li, x: sx, y: EYE + pY - 0.15, z: sz, vx: rx * ROCKET.speed, vz: rz * ROCKET.speed, life: ROCKET.life });
         }
         return;
       }
@@ -1225,7 +1318,7 @@ export const doom: MiniGame3D = {
       name: string; r: number; rz?: number; h: number;
       kind: 'pillar' | 'torch' | 'seal' | 'start' | 'med' | 'arm' | 'bul' | 'shl' | 'box';
       /** тип структуры для kind=pillar */
-      pk?: 'block' | 'obelisk' | 'wall' | 'pyramid' | 'rubble' | 'column' | 'steps' | 'rock';
+      pk?: 'block' | 'obelisk' | 'wall' | 'pyramid' | 'rubble' | 'column' | 'steps' | 'rock' | 'statue' | 'dais';
     }
     // Хотбар: цифра = категория; повторное нажатие листает варианты внутри,
     // колесо мыши листает ВСЕ варианты подряд, T поворачивает прямоугольные.
@@ -1243,12 +1336,16 @@ export const doom: MiniGame3D = {
           { name: 'ПИЛОН+', r: 2.2, h: 5, kind: 'pillar', pk: 'block' },
           { name: 'КОЛОННА', r: 1.4, h: 6.9, kind: 'pillar', pk: 'column' },
           { name: 'ОБЕЛИСК', r: 1.2, h: 11.5, kind: 'pillar', pk: 'obelisk' },
+          { name: 'СТАТУЯ', r: 1.3, h: 5.9, kind: 'pillar', pk: 'statue' },
         ],
       },
       {
-        name: 'СТУПЕНИ', items: [
+        name: 'ПЛАТФОРМЫ', items: [
           { name: 'СТУПЕНИ', r: 2.2, rz: 1.6, h: 1.7, kind: 'pillar', pk: 'steps' },
           { name: 'ШИРОКИЕ', r: 3.6, rz: 1.6, h: 1.7, kind: 'pillar', pk: 'steps' },
+          // проходимые: на них можно зайти, монстры карабкаются следом
+          { name: 'ПЛАТФОРМА', r: 4.2, rz: 3.4, h: 1.0, kind: 'pillar', pk: 'dais' },
+          { name: 'ПЛОЩАДКА', r: 2.6, h: 1.0, kind: 'pillar', pk: 'dais' },
         ],
       },
       {
@@ -1332,7 +1429,7 @@ export const doom: MiniGame3D = {
       disposeArenaLive();
       buildArenaLive(eDef);
       resetPickups(eDef, false);
-      startMarker.position.set(eDef.start.x, 0, eDef.start.z);
+      startMarker.position.set(eDef.start.x, groundY(eDef.start.x, eDef.start.z), eDef.start.z);
       eSaveLocal();
       ctx.compile();          // число источников света могло смениться
     };
@@ -1402,10 +1499,17 @@ export const doom: MiniGame3D = {
     };
 
     /** пересечение квадратных следов: занято ли место (x,z,r) чем-то из eDef */
-    const eBlocked = (x: number, z: number, rx: number, rz: number): boolean => {
+    const eBlocked = (x: number, z: number, rx: number, rz: number, placingDais = false): boolean => {
       const hit = (ox: number, oz: number, orx: number, orz: number) =>
         Math.abs(x - ox) < rx + orx && Math.abs(z - oz) < rz + orz;
-      for (const p of eDef.pillars) if (hit(p.x, p.z, p.r, p.rz ?? p.r)) return true;
+      for (const p of eDef.pillars) {
+        const isDais = p.kind === 'dais';
+        // платформа проходима: на ней можно ставить что угодно, а её саму —
+        // поверх чего угодно, кроме другой платформы
+        if (placingDais !== isDais) continue;
+        if (hit(p.x, p.z, p.r, p.rz ?? p.r)) return true;
+      }
+      if (placingDais) return false;
       for (const t of eDef.torches) if (hit(t.x, t.z, 0.6, 0.6)) return true;
       for (const sl of eDef.seals) if (hit(sl.x, sl.z, 2.0, 2.0)) return true;
       for (const pk of eDef.pickups) if (hit(pk.x, pk.z, 0.6, 0.6)) return true;
@@ -1428,12 +1532,17 @@ export const doom: MiniGame3D = {
         const sl = eDef.seals[i];
         if (at(sl.x, sl.z, 2.0, 2.0)) return { type: 'seal', ix: i, x: sl.x, z: sl.z, r: 2.0, rz: 2.0, h: 0.5 };
       }
-      for (let i = 0; i < eDef.pillars.length; i++) {
-        const pl = eDef.pillars[i];
-        const prz = pl.rz ?? pl.r;
-        const hh = pl.kind === 'obelisk' ? 12 : pl.kind === 'wall' ? 4.7 : pl.kind === 'pyramid' ? 9.4
-          : pl.kind === 'column' ? 7.2 : pl.kind === 'steps' ? 2.0 : pl.kind === 'rock' ? 1.8 : pl.kind === 'rubble' ? 2.6 : 5.4;
-        if (at(pl.x, pl.z, pl.r, prz)) return { type: 'pillar', ix: i, x: pl.x, z: pl.z, r: pl.r + 0.3, rz: prz + 0.3, h: hh };
+      for (let pass = 0; pass < 2; pass++) {
+        for (let i = 0; i < eDef.pillars.length; i++) {
+          const pl = eDef.pillars[i];
+          const isDais = pl.kind === 'dais';
+          if ((pass === 0) === isDais) continue;   // сперва структуры, платформы напоследок
+          const prz = pl.rz ?? pl.r;
+          const hh = pl.kind === 'obelisk' ? 12 : pl.kind === 'wall' ? 4.7 : pl.kind === 'pyramid' ? 9.4
+            : pl.kind === 'column' ? 7.2 : pl.kind === 'statue' ? 6.1 : pl.kind === 'steps' ? 2.0
+              : pl.kind === 'dais' ? 1.2 : pl.kind === 'rock' ? 1.8 : pl.kind === 'rubble' ? 2.6 : 5.4;
+          if (at(pl.x, pl.z, pl.r, prz)) return { type: 'pillar', ix: i, x: pl.x, z: pl.z, r: pl.r + 0.3, rz: prz + 0.3, h: hh };
+        }
       }
       return null;
     };
@@ -1479,7 +1588,7 @@ export const doom: MiniGame3D = {
             const limX = sl.kind === 'torch' ? ARENA - 1 : sl.kind === 'pillar' ? Math.floor(ARENA - 1 - d.rx) : ARENA - 2;
             const limZ = sl.kind === 'torch' ? ARENA - 1 : sl.kind === 'pillar' ? Math.floor(ARENA - 1 - d.rz) : ARENA - 2;
             const inB = Math.abs(cx) <= limX && Math.abs(cz) <= limZ;
-            eAim = { x: cx, z: cz, ok: inB && !eBlocked(cx, cz, d.rx, d.rz) };
+            eAim = { x: cx, z: cz, ok: inB && !eBlocked(cx, cz, d.rx, d.rz, sl.pk === 'dais') };
           }
         }
       }
@@ -1746,8 +1855,8 @@ export const doom: MiniGame3D = {
         `пилоны ${c.pillars}/${ARENA_CAPS.pillars} · факелы ${c.torches}/${ARENA_CAPS.torches}` +
         ` · печати ${c.seals}/${ARENA_CAPS.seals} · предметы ${c.pickups}/${ARENA_CAPS.pickups}` +
         ` · размер ${eDef.size * 2}×${eDef.size * 2}` +
-        ` · небо: ${eDef.sky === 'hell' ? 'ПЕКЛО' : eDef.sky === 'dusk' ? 'ЗАКАТ' : eDef.sky === 'day' ? 'ДЕНЬ' : 'ЧЕРНОТА'}` +
-        ` · пол: ${(eDef.ground ?? 'checker') === 'checker' ? 'ШАХМАТКА' : eDef.ground === 'sand' ? 'ПЕСОК' : eDef.ground === 'sand_road' ? 'ПЕСОК+ДОРОГА' : 'КАМЕНЬ'}`,
+        ` · небо: ${eDef.sky === 'hell' ? 'ПЕКЛО' : eDef.sky === 'dusk' ? 'ЗАКАТ' : eDef.sky === 'day' ? 'ДЕНЬ' : 'КВЕЙК'}` +
+        ` · пол: ${(eDef.ground ?? 'checker') === 'checker' ? 'ШАХМАТКА' : eDef.ground === 'sand' ? 'ПЕСОК' : eDef.ground === 'sand_road' ? 'ПЕСОК+ДОРОГА' : eDef.ground === 'stone' ? 'КАМЕНЬ' : 'БРУСЧАТКА'}`,
         14, 48,
       );
       if (c.seals < 2) {
@@ -2341,7 +2450,7 @@ export const doom: MiniGame3D = {
         }
         for (const p of pickups) {
           p.grp.rotation.y += dt * 1.6;
-          p.grp.position.y = 0.1 + Math.sin(time * 2.5 + p.x) * 0.12;
+          p.grp.position.y = groundY(p.x, p.z) + 0.1 + Math.sin(time * 2.5 + p.x) * 0.12;
         }
         drawHud();
         touch?.endFrame();
@@ -2399,6 +2508,7 @@ export const doom: MiniGame3D = {
       const mvz = (-cosY * fwd - sinY * strafe) / len * SPD;
       if (fwd || strafe) bob += dt * 9;
       [px, pz] = collide(px + mvx * dt, pz + mvz * dt, P_RADIUS);
+      pY = groundY(px, pz);
       sfx.setListener(px, pz, yaw);   // позиционный звук считается от игрока
 
       // ── огонь ──
@@ -2549,13 +2659,13 @@ export const doom: MiniGame3D = {
               if (mi < 0) break;                       // пул выбран — залп короче, но без просадки
               const li = ballLights.findIndex((q) => q.intensity === 0);
               const ox = sx * -uz, oz = sx * ux;
-              ballMeshes[mi].position.set(m.x + ox, 1.7, m.z + oz);
+              ballMeshes[mi].position.set(m.x + ox, m.y + 1.7, m.z + oz);
               ballMeshes[mi].visible = true;
               if (li >= 0) {
-                ballLights[li].position.set(m.x + ox, 1.7, m.z + oz);
+                ballLights[li].position.set(m.x + ox, m.y + 1.7, m.z + oz);
                 ballLights[li].intensity = 2.2;
               }
-              balls.push({ mi, li, x: m.x + ox, y: 1.7, z: m.z + oz, vx: ux * 13, vz: uz * 13, life: 3.4 });
+              balls.push({ mi, li, x: m.x + ox, y: m.y + 1.7, z: m.z + oz, vx: ux * 13, vz: uz * 13, life: 3.4 });
             }
           }
         } else {
@@ -2576,8 +2686,16 @@ export const doom: MiniGame3D = {
             m.z += (oz / dd) * (need - dd) * 0.5;
           }
         }
-        if (!d.flying) [m.x, m.z] = collide(m.x, m.z, d.radius);
-        else {
+        if (!d.flying) {
+          // в горку по ступенькам лезется медленнее — как и просилось
+          const wasG = groundY(wasX, wasZ);
+          const nowG = groundY(m.x, m.z);
+          if (nowG > wasG + 0.02) {
+            m.x = wasX + (m.x - wasX) * 0.72;
+            m.z = wasZ + (m.z - wasZ) * 0.72;
+          }
+          [m.x, m.z] = collide(m.x, m.z, d.radius);
+        } else {
           const lim = ARENA - 1 - d.radius;
           m.x = Math.max(-lim, Math.min(lim, m.x));
           m.z = Math.max(-lim, Math.min(lim, m.z));
@@ -2587,6 +2705,11 @@ export const doom: MiniGame3D = {
         m.grp.position.z = m.z;
         m.wail?.move(m.x, m.z);
         if (d.flying) m.grp.position.y = m.y;
+        else {
+          // наземный: высота пола (платформы) поверх анимационных сдвигов
+          m.y = groundY(m.x, m.z);
+          m.grp.position.y += m.y;
+        }
 
         // ── куда монстр смотрит ──
         // Думовское «всегда лицом к игроку» оставляем только там, где монстр
@@ -2668,7 +2791,7 @@ export const doom: MiniGame3D = {
         bmesh.rotation.x += dt * 6; bmesh.rotation.y += dt * 5;
         if (b.li >= 0) ballLights[b.li].position.set(b.x, b.y, b.z);
         if (rng() < dt * 20) puff(b.x, b.y, b.z, 0xff7020, 0.25);
-        const hitP = Math.hypot(b.x - px, b.z - pz) < P_RADIUS + 0.4 && Math.abs(b.y - EYE) < 1.6;
+        const hitP = Math.hypot(b.x - px, b.z - pz) < P_RADIUS + 0.4 && Math.abs(b.y - (EYE + pY)) < 1.6;
         // пилон высотой 5 м — файербол летит на 1.7 м, значит гасится о него
         const hitWall = inPillar(b.x, b.z, 0.22) || Math.abs(b.x) > ARENA || Math.abs(b.z) > ARENA;
         if (hitP || hitWall || b.life <= 0) {
@@ -2691,9 +2814,10 @@ export const doom: MiniGame3D = {
           continue;
         }
         p.grp.rotation.y += dt * (p.kind === 'launcher' ? 0.9 : 1.6);
-        p.grp.position.y = p.kind === 'launcher'
+        const pgY = groundY(p.x, p.z);
+        p.grp.position.y = pgY + (p.kind === 'launcher'
           ? 0.75 + Math.sin(time * 1.7) * 0.22          // ствол парит заметно выше
-          : 0.1 + Math.sin(time * 2.5 + p.x) * 0.12;
+          : 0.1 + Math.sin(time * 2.5 + p.x) * 0.12);
         if (p.kind === 'launcher') {
           // столб искр снизу вверх — чтобы находилась через всю арену
           if (rng() < dt * 26) {
@@ -2788,9 +2912,9 @@ export const doom: MiniGame3D = {
       }
       const bobY = Math.sin(bob) * 0.055;
       const bobX = Math.cos(bob * 0.5) * 0.035;
-      cam.position.set(px + bobX * 0.4, EYE + bobY, pz);
+      cam.position.set(px + bobX * 0.4, EYE + pY + bobY, pz);
       cam.rotation.set(pitch, yaw, 0, 'YXZ');
-      playerLamp.position.set(px, EYE + 0.4, pz);
+      playerLamp.position.set(px, EYE + pY + 0.4, pz);
       gunGrp.position.set(bobX, bobY * 0.6 - kick * 0.12, kick * 0.18);
       gunGrp.rotation.set(kick * 0.22, 0, 0);
 

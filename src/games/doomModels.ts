@@ -56,8 +56,8 @@ export const ROCKET = { splash: 70, radius: 5.5, self: 0.35, speed: 24, life: 3.
 
 export type ArenaPickupKind = 'med' | 'arm' | 'bul' | 'shl' | 'box';
 export type ArenaSky = 'hell' | 'dusk' | 'day' | 'void';
-export type ArenaPillarKind = 'block' | 'obelisk' | 'wall' | 'pyramid' | 'rubble' | 'column' | 'steps' | 'rock';
-export type ArenaGround = 'checker' | 'sand' | 'sand_road' | 'stone';
+export type ArenaPillarKind = 'block' | 'obelisk' | 'wall' | 'pyramid' | 'rubble' | 'column' | 'steps' | 'rock' | 'statue' | 'dais';
+export type ArenaGround = 'checker' | 'sand' | 'sand_road' | 'stone' | 'cobble';
 export interface ArenaPillar {
   x: number; z: number;
   /** полуширина по X */ r: number;
@@ -166,17 +166,18 @@ export const BUILTIN_ARENAS: { name: string; def: ArenaDef }[] = [
     def: {
       size: 24,
       sky: 'void',
-      ground: 'stone',
+      ground: 'cobble',
       pillars: [
         // фасад собора: две стены и заваленный проход между ними
         { x: -13.5, z: -14, r: 7.5, rz: 1.0, kind: 'wall' }, { x: 13.5, z: -14, r: 7.5, rz: 1.0, kind: 'wall' },
         { x: 0, z: -14, r: 6, rz: 1.6, kind: 'rubble' },
         // крылья фасада уходят к боковым стенам
         { x: -22, z: -9, r: 1.0, rz: 4.0, kind: 'wall' }, { x: 22, z: -9, r: 1.0, rz: 4.0, kind: 'wall' },
-        // готические колонны двора, как в q3dm1
-        { x: -9, z: 0, r: 1.4, rz: 1.4, kind: 'column' }, { x: 9, z: 0, r: 1.4, rz: 1.4, kind: 'column' },
-        // ступени, ведущие к колоннам с юга — на них в оригинале хелсы и броня
-        { x: -9, z: 4.6, r: 2.2, rz: 1.6, kind: 'steps' }, { x: 9, z: 4.6, r: 2.2, rz: 1.6, kind: 'steps' },
+        // две костяные статуи на пьедесталах — визитка двора q3dm1
+        { x: -9, z: 0, r: 1.3, rz: 1.3, kind: 'statue' }, { x: 9, z: 0, r: 1.3, rz: 1.3, kind: 'statue' },
+        // ржаво-оранжевая НИЗКАЯ платформа с «ракетницей» — на неё можно зайти:
+        // ступеньки-юбка по периметру, сходить можно в любую сторону
+        { x: 0, z: -2, r: 4.2, rz: 3.4, kind: 'dais' },
       ],
       torches: [
         { x: -8.5, z: -11.5 }, { x: 8.5, z: -11.5 },
@@ -187,13 +188,13 @@ export const BUILTIN_ARENAS: { name: string; def: ArenaDef }[] = [
         { x: -19, z: -2 }, { x: 19, z: -2 }, { x: 0, z: 9 },
       ],
       pickups: [
-        // «ракетница» двора: первая обойма лежит ровно в центре, как RL в q3dm1
+        // «ракетница»: первая обойма НА платформе, ровно как RL в q3dm1
         { kind: 'bul', x: 0, z: -2 },
-        // аптечки и броня у ступеней с обеих сторон — как в оригинале
-        { kind: 'med', x: -5.4, z: 4.6 }, { kind: 'med', x: 5.4, z: 4.6 },
-        { kind: 'arm', x: -12.6, z: 4.6 }, { kind: 'arm', x: 12.6, z: 4.6 },
-        { kind: 'bul', x: -14, z: -5 }, { kind: 'bul', x: 14, z: -5 },
-        { kind: 'box', x: 0, z: -8 },
+        // аптечки и броня у статуй с обеих сторон — раскладка оригинала
+        { kind: 'med', x: -5.6, z: 3.6 }, { kind: 'med', x: 5.6, z: 3.6 },
+        { kind: 'arm', x: -12.6, z: 0 }, { kind: 'arm', x: 12.6, z: 0 },
+        { kind: 'bul', x: -14, z: -6 }, { kind: 'bul', x: 14, z: -6 },
+        { kind: 'box', x: 0, z: -9 },
         { kind: 'shl', x: -16, z: 8 }, { kind: 'shl', x: 16, z: 8 },
         { kind: 'med', x: 0, z: 15 },
       ],
@@ -213,7 +214,7 @@ export function validateArena(raw: unknown): ArenaDef | null {
     ? Math.max(16, Math.min(40, Math.round(o.size / 2) * 2))
     : 26;
   const sky: ArenaSky = o.sky === 'day' || o.sky === 'dusk' || o.sky === 'void' ? o.sky : 'hell';
-  const ground: ArenaGround = o.ground === 'sand' || o.ground === 'sand_road' || o.ground === 'stone' ? o.ground : 'checker';
+  const ground: ArenaGround = o.ground === 'sand' || o.ground === 'sand_road' || o.ground === 'stone' || o.ground === 'cobble' ? o.ground : 'checker';
   const out: ArenaDef = { size, sky, ground, pillars: [], torches: [], seals: [], pickups: [], start: { x: 0, z: 14 } };
   const B = size - 2;   // общая граница объектов
 
@@ -221,7 +222,7 @@ export function validateArena(raw: unknown): ArenaDef | null {
   for (const it of arr(o.pillars).slice(0, ARENA_CAPS.pillars)) {
     const e = it as Record<string, unknown>;
     const kind: ArenaPillarKind = kinds0.includes(e.kind as ArenaPillarKind) ? (e.kind as ArenaPillarKind) : 'block';
-    const rMax = kind === 'pyramid' ? 9 : kind === 'wall' || kind === 'steps' ? 8 : kind === 'rubble' ? 6 : 3;
+    const rMax = kind === 'pyramid' ? 9 : kind === 'wall' || kind === 'steps' || kind === 'dais' ? 8 : kind === 'rubble' ? 6 : kind === 'statue' ? 2 : 3;
     const dim = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? Math.max(0.6, Math.min(rMax, v)) : null);
     const r = dim(e.r);
     const rz = e.rz === undefined ? r : dim(e.rz);
