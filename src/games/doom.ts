@@ -461,6 +461,10 @@ export const doom: MiniGame3D = {
     };
     let faceLook = 0, faceLookT = 0, faceOw = 0;
     let launcherMsg = 0;       // сколько ещё секунд показывать подсказку о ракетнице
+    // чит с титула, как в думе: набрать IDCLEV, потом две цифры волны
+    let cheatBuf = '';
+    let warpDigits: string | null = null;
+    let warpTo: number | null = null;
     let rktArmed = false;      // ствол уже выложен на арену
 
     const mons: Mon[] = [];
@@ -610,10 +614,28 @@ export const doom: MiniGame3D = {
     const onKeyDown = (e: KeyboardEvent) => {
       keys.add(e.code);
       if (e.code === 'F3') { showPerf = !showPerf; e.preventDefault(); }
-      if (e.code === 'Digit1' && owned[0]) { weapon = 0; buildGun(0); sfx.play('weaponSwitch'); }
-      if (e.code === 'Digit2' && owned[1]) { weapon = 1; buildGun(1); sfx.play('weaponSwitch'); }
-      if (e.code === 'Digit3' && owned[2]) { weapon = 2; buildGun(2); sfx.play('weaponSwitch'); }
-      if (e.code === 'Digit4' && owned[3]) { weapon = 3; buildGun(3); sfx.play('weaponSwitch'); }
+      // ── IDCLEV: по кодам клавиш, чтобы раскладка не мешала ──
+      if (phase === 'title') {
+        const mL = /^Key([A-Z])$/.exec(e.code);
+        if (mL) {
+          cheatBuf = (cheatBuf + mL[1]).slice(-6);
+          if (cheatBuf.endsWith('IDCLEV')) { warpDigits = ''; sfx.play('menuMove'); }
+        } else if (warpDigits !== null) {
+          const mD = /^(?:Digit|Numpad)(\d)$/.exec(e.code);
+          if (mD) {
+            warpDigits += mD[1];
+            if (warpDigits.length >= 2) {
+              warpTo = Math.max(1, Math.min(99, Number(warpDigits)));
+              warpDigits = null;
+            }
+          } else if (!/^Shift/.test(e.code)) warpDigits = null;   // любая другая клавиша — отмена
+        }
+      }
+      const inRun = phase === 'wave' || phase === 'clear';
+      if (e.code === 'Digit1' && owned[0] && inRun) { weapon = 0; buildGun(0); sfx.play('weaponSwitch'); }
+      if (e.code === 'Digit2' && owned[1] && inRun) { weapon = 1; buildGun(1); sfx.play('weaponSwitch'); }
+      if (e.code === 'Digit3' && owned[2] && inRun) { weapon = 2; buildGun(2); sfx.play('weaponSwitch'); }
+      if (e.code === 'Digit4' && owned[3] && inRun) { weapon = 3; buildGun(3); sfx.play('weaponSwitch'); }
       if (e.code === 'Space' || e.code.startsWith('Arrow')) e.preventDefault();
     };
     const onKeyUp = (e: KeyboardEvent) => keys.delete(e.code);
@@ -1052,8 +1074,10 @@ export const doom: MiniGame3D = {
             g.restore();
           }
           if (on) {
-            // курсор-череп слева
-            const sx = W / 2 - Math.min(W * 0.25, 150), sy = yy - 10;
+            // курсор-череп слева от края текста: пункты разной длины,
+            // фиксированный отступ налезал на длинную строку сложности
+            const tw = g.measureText(items[i]).width;
+            const sx = W / 2 - tw / 2 - 34, sy = yy - 10;
             g.fillStyle = '#d8d2c0'; g.fillRect(sx - 12, sy - 12, 24, 20);
             g.fillStyle = '#140808'; g.fillRect(sx - 8, sy - 6, 6, 7); g.fillRect(sx + 2, sy - 6, 6, 7);
             g.fillStyle = '#d8d2c0'; g.fillRect(sx - 7, sy + 8, 14, 5);
@@ -1063,6 +1087,11 @@ export const doom: MiniGame3D = {
         fitFont(g, mob ? 'ТАП ПО ПУНКТУ' : '↑↓ ВЫБОР · ENTER / SPACE — СТАРТ', W * 0.8, 13, FAM);
         g.fillStyle = '#7a5a50';
         g.fillText(mob ? 'ТАП ПО ПУНКТУ' : '↑↓ ВЫБОР · ENTER / SPACE — СТАРТ', W / 2, H * 0.82);
+        if (warpDigits !== null) {               // набран IDCLEV — ждём две цифры волны
+          fitFont(g, `IDCLEV ${warpDigits}▂`, W * 0.4, 13, FAM);
+          g.fillStyle = '#7bd88f';
+          g.fillText(`IDCLEV ${warpDigits}▂`, W / 2, H * 0.88);
+        }
         g.textAlign = 'left';
         return;
       }
@@ -1411,6 +1440,14 @@ export const doom: MiniGame3D = {
             music.play('main', { fade: 1.4 });   // из chill в бой с наложением
             startWave();
           }
+        }
+        if (warpTo !== null) {
+          // IDCLEV набран: прыжок сразу на выбранную волну
+          sfx.play('menuSelect');
+          wave = warpTo - 1;                     // startWave сделает wave++
+          warpTo = null;
+          music.play('main', { fade: 1.4 });
+          startWave();
         }
         // камера уезжает к диораме: в кадре только черепа и столбы искр
         menuRig.visible = true;
