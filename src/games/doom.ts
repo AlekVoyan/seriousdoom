@@ -461,6 +461,11 @@ export const doom: MiniGame3D = {
     };
     let faceLook = 0, faceLookT = 0, faceOw = 0;
     let launcherMsg = 0;       // сколько ещё секунд показывать подсказку о ракетнице
+    // пиксельные искры-огонь, поднимающиеся сквозь название на титуле
+    interface TitleSpark { x: number; y: number; vy: number; drift: number; life: number; max: number; sz: number }
+    const titleFire: TitleSpark[] = [];
+    let fireLast = 0;
+
     // чит с титула, как в думе: набрать IDCLEV, потом две цифры волны
     let cheatBuf = '';
     let warpDigits: string | null = null;
@@ -1051,11 +1056,48 @@ export const doom: MiniGame3D = {
         gr.addColorStop(0, 'rgba(200,40,10,0.55)'); gr.addColorStop(1, 'rgba(20,4,4,0)');
         g.fillStyle = gr; g.fillRect(0, 0, W, H * 0.5);
         g.textAlign = 'center';
+        // название — во всю ширину; размер берём фактический, к нему привязан огонь
+        const titleFont = fitFont(g, 'ФАЄРВОЛ', W * 0.92, 116, FAM);
+        const titlePx = parseInt(titleFont, 10) || 62;
+        const titleW = g.measureText('ФАЄРВОЛ').width;
+        const titleY = H * 0.24;
         g.save();
-        fitFont(g, 'ФАЄРВОЛ', W * 0.8, 62, FAM);
-        g.shadowColor = 'rgba(255,80,20,0.9)'; g.shadowBlur = 26;
+        g.shadowColor = 'rgba(255,80,20,0.9)'; g.shadowBlur = 44;
         g.fillStyle = '#e8c840';
-        g.fillText('ФАЄРВОЛ', W / 2, H * 0.24);
+        g.fillText('ФАЄРВОЛ', W / 2, titleY);
+        g.restore();
+
+        // ── огонь: мелкие искры рождаются в буквах, всплывают и гаснут ──
+        if (!titleFire.length) {
+          for (let i = 0; i < 90; i++) {
+            titleFire.push({ x: 0, y: 0, vy: 0, drift: 0, life: 1e9, max: 1, sz: 2 });
+          }
+        }
+        const dtF = Math.min(0.05, Math.max(0, time - fireLast));
+        fireLast = time;
+        g.save();
+        g.globalCompositeOperation = 'lighter';        // искры складываются, как огонь
+        for (const p of titleFire) {
+          p.life += dtF;
+          if (p.life >= p.max) {
+            p.x = (rng() - 0.5) * titleW * 0.98;
+            p.y = titleY - rng() * titlePx * 0.78;     // внутри глифов
+            p.vy = 24 + rng() * 58;
+            p.drift = (rng() - 0.5) * 22;
+            p.max = 0.5 + rng() * 0.95;
+            p.sz = (1.5 + rng() * 2.8) * Math.max(1, W / 820);
+            p.life = 0;
+          }
+          const k = p.life / p.max;
+          p.y -= p.vy * dtF;
+          p.x += Math.sin(time * 3 + p.y * 0.06) * p.drift * dtF;
+          // остывание: бело-жёлтая → оранжевая → тёмно-красная
+          const col = k < 0.3 ? '255,228,150' : k < 0.65 ? '255,140,50' : '188,58,24';
+          const a = 0.9 * (1 - k) * (k < 0.12 ? k / 0.12 : 1);
+          g.fillStyle = `rgba(${col},${a.toFixed(3)})`;
+          const sz = p.sz * (1 - k * 0.45);
+          g.fillRect(W / 2 + p.x - sz / 2, p.y - sz / 2, sz, sz);
+        }
         g.restore();
         fitFont(g, 'ТРИМАЙ ПОРТ · ОПЛАТА ЗА ВІДБИТУ ХВИЛЮ', W * 0.8, 15, FAM);
         g.fillStyle = '#c88a5a';
