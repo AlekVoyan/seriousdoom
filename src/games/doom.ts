@@ -1527,7 +1527,8 @@ export const doom: MiniGame3D = {
       mDX = 0; mDY = 0;
       if (touch) {
         yaw -= tlx * 2.4 * dt;
-        pitch = Math.max(-0.5, Math.min(0.5, pitch + tly * 1.4 * dt));
+        // стик вниз = взгляд вниз, как у мыши (раньше было наоборот)
+        pitch = Math.max(-0.5, Math.min(0.5, pitch - tly * 1.4 * dt));
       }
       // классика: стрелки крутят, если мышь не захвачена
       if (!locked && !touch) {
