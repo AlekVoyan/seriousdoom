@@ -2714,6 +2714,20 @@ export const doom: MiniGame3D = {
             m.z = wasZ + (m.z - wasZ) * 0.72;
           }
           [m.x, m.z] = collide(m.x, m.z, d.radius);
+          // Таран/прыжок В СТЕНУ: направление у них заморожено, скользить
+          // вдоль препятствия они не могут — без этой проверки рогач вечно
+          // стоит, упёршись в фасад (арена-гейт), т.к. до края арены не доехал
+          if (m.kind === 'bull' && m.state === 'charge') {
+            const moved = Math.hypot(m.x - wasX, m.z - wasZ);
+            if (moved < spd * dt * 0.4) { m.state = 'walk'; m.atkCd = 0.5; }
+          } else if (m.kind === 'kleer' && m.state === 'leap') {
+            const moved = Math.hypot(m.x - wasX, m.z - wasZ);
+            if (moved < spd * dt * 0.5) {
+              m.state = 'recover'; m.windT = 0.85; m.atkCd = 1.1;
+              m.grp.scale.set(1, 1, 1);
+              m.grp.position.y = 0;
+            }
+          }
         } else {
           const lim = ARENA - 1 - d.radius;
           m.x = Math.max(-lim, Math.min(lim, m.x));
