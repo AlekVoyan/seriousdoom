@@ -809,8 +809,9 @@ export const doom: MiniGame3D = {
       phase = 'wave'; phaseT = 0;
       sfx.play('waveStart');
       music.play('main', { fade: 0.7 });
-      if (wave === 3 && !owned[1]) { owned[1] = true; weapon = 1; buildGun(1); ammo.shl += 20; sfx.play('pickWeapon'); }
-      if (wave === 6 && !owned[2]) { owned[2] = true; weapon = 2; buildGun(2); ammo.bul += 100; sfx.play('pickWeapon'); }
+      // «>=», а не «===»: при прыжке на волну (IDCLEV / ?wave) выдача догоняет
+      if (wave >= 3 && !owned[1]) { owned[1] = true; weapon = 1; buildGun(1); ammo.shl += 20; sfx.play('pickWeapon'); }
+      if (wave >= 6 && !owned[2]) { owned[2] = true; weapon = 2; buildGun(2); ammo.bul += 100; sfx.play('pickWeapon'); }
       if (wave >= RKT_WAVE && !rktArmed) {
         // ствол не выдаётся в руки — за ним надо сходить, под огнём
         rktArmed = true;
