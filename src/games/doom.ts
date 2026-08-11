@@ -3,7 +3,7 @@ import type { MiniGameOpts } from '../core/types';
 import { makeRng } from '../core/rng';
 import { box, type MiniGame3D, type MiniGame3DContext } from '../core/three3d';
 import { isTouchDevice, createMultiTouch, inCircle, drawButton, fitFont } from '../core/mobile';
-import { createPentagram, createEmberCloud, createDustCloud, buildMonster, buildWeapon, buildPickup, buildProp, buildRocket, ROCKET, type Pentagram } from './doomModels';
+import { createPentagram, createEmberCloud, createDustCloud, buildMonster, buildWeapon, buildPickup, buildProp, buildRocket, bakeStatic, ROCKET, type Pentagram } from './doomModels';
 import { createDoomAudio, type SfxId, type SfxLoop } from '../core/audioDoom';
 import { createMusicDirector } from '../core/musicDirector';
 
@@ -96,6 +96,10 @@ const MDEFS: Record<MK, MDef> = {
 
 interface Mon {
   kind: MK; vet: boolean; grp: THREE.Group; parts: THREE.Mesh[];
+  /** клоны материалов (геометрия общая на вариант — её не освобождать) */
+  mats: THREE.Material[];
+  /** вспышка «всё белое» при попадании */
+  setFlash(on: boolean): void;
   x: number; z: number; y: number; hp: number; maxHp: number;
   vx: number; vz: number; t: number; atkCd: number; hurtT: number;
   state: 'walk' | 'charge' | 'wind' | 'leap' | 'recover';
@@ -103,10 +107,10 @@ interface Mon {
   /** непрерывный вой (камикадзе) — гаснет вместе с монстром */
   wail?: SfxLoop;
 }
-interface Gib { x: number; y: number; z: number; vx: number; vy: number; vz: number; rotX: number; rotZ: number; rx: number; rz: number; s: number; col: THREE.Color; life: number }
+interface Gib { x: number; y: number; z: number; vx: number; vy: number; vz: number; rotX: number; rotZ: number; rx: number; rz: number; s: number; col: number; life: number }
 interface Ball { mi: number; li: number; x: number; y: number; z: number; vx: number; vz: number; life: number }
 interface Pickup { grp: THREE.Group; kind: 'med' | 'arm' | 'bul' | 'box' | 'shl' | 'rkt' | 'launcher'; x: number; z: number; taken: number }
-interface Puff { x: number; y: number; z: number; vy: number; life: number; max: number; col: THREE.Color }
+interface Puff { x: number; y: number; z: number; vy: number; life: number; max: number; col: number }
 
 const WEAPONS = [
   { name: 'ПИСТОЛЕТ', dmg: 15, cd: 0.36, spread: 0.02, pellets: 1, ammo: 'bul' as const, use: 1 },
@@ -142,17 +146,19 @@ export const doom: MiniGame3D = {
     ctx.scene.background = new THREE.Color(0x2a0a08);
     ctx.scene.fog = new THREE.Fog(0x300c08, 22, 80);
 
-    const floorTiles = new THREE.Group();
+    // всё неподвижное копится здесь и в конце сливается в ОДИН меш:
+    // пол (169 плиток), стены с отбойниками, пилоны, кронштейны факелов —
+    // было ~200 вызовов отрисовки, станет один (замер: insttest.html)
+    const staticG = new THREE.Group();
     const TS = 4;
     for (let ix = -ARENA / TS; ix < ARENA / TS; ix++) {
       for (let iz = -ARENA / TS; iz < ARENA / TS; iz++) {
         const t = box(TS - 0.06, 0.3, TS - 0.06, (ix + iz) % 2 ? C_FLOOR_A : C_FLOOR_B);
         t.position.set(ix * TS + TS / 2, -0.15, iz * TS + TS / 2);
-        floorTiles.add(t);
+        staticG.add(t);
       }
     }
-    ctx.scene.add(floorTiles);
-    // лава за стенами (виден край мира)
+    // лава за стенами (виден край мира) — светится, в статику не сливается
     for (const [lx, lz, lw, ld] of [
       [0, -ARENA - 9, ARENA * 2 + 26, 18], [0, ARENA + 9, ARENA * 2 + 26, 18],
       [-ARENA - 9, 0, 18, ARENA * 2 + 2], [ARENA + 9, 0, 18, ARENA * 2 + 2],
@@ -171,13 +177,13 @@ export const doom: MiniGame3D = {
     ] as const) {
       const w = box(ww, WALL_H, wd, C_WALL);
       w.position.set(wx, WALL_H / 2, wz);
-      ctx.scene.add(w);
+      staticG.add(w);
       const trim = box(ww + 0.1, 0.5, wd + 0.1, C_WALL_TRIM);
       trim.position.set(wx, 1.1, wz);
-      ctx.scene.add(trim);
+      staticG.add(trim);
       const top = box(ww + 0.3, 0.6, wd + 0.3, C_WALL_TRIM);
       top.position.set(wx, WALL_H, wz);
-      ctx.scene.add(top);
+      staticG.add(top);
     }
     // пилоны-укрытия
     interface Pillar { x: number; z: number; r: number }
@@ -189,17 +195,17 @@ export const doom: MiniGame3D = {
     for (const p of pillars) {
       const col = box(p.r * 2, 5, p.r * 2, C_PILLAR);
       col.position.set(p.x, 2.5, p.z);
-      ctx.scene.add(col);
+      staticG.add(col);
       const cap = box(p.r * 2 + 0.5, 0.5, p.r * 2 + 0.5, C_WALL_TRIM);
       cap.position.set(p.x, 5.2, p.z);
-      ctx.scene.add(cap);
+      staticG.add(cap);
       const base = box(p.r * 2 + 0.6, 0.4, p.r * 2 + 0.6, C_WALL_TRIM);
       base.position.set(p.x, 0.2, p.z);
-      ctx.scene.add(base);
+      staticG.add(base);
       // «череп» на центральном пилоне — узнаваемая деталь.
       // Модель общая с меню и витриной: одна правка — везде одинаково.
       if (p.r > 2) {
-        const skull = buildProp('skull');
+        const skull = bakeStatic(buildProp('skull'));   // ~25 мешей → 1 + угли
         skull.scale.setScalar(1.25);
         skull.position.set(0, 2.5, p.z - p.r - 0.15);
         ctx.scene.add(skull);
@@ -216,7 +222,7 @@ export const doom: MiniGame3D = {
     for (const [tx, tz] of TP) {
       const bracket = box(0.3, 0.9, 0.3, 0x2a2220);
       bracket.position.set(tx, 3.0, tz);
-      ctx.scene.add(bracket);
+      staticG.add(bracket);
       const flame = new THREE.Mesh(
         new THREE.BoxGeometry(0.45, 0.7, 0.45),
         new THREE.MeshStandardMaterial({ color: 0xffa040, emissive: 0xff7a20, emissiveIntensity: 1.6, roughness: 1 }),
@@ -228,6 +234,8 @@ export const doom: MiniGame3D = {
       ctx.scene.add(light);
       torches.push({ light, flame, ph: rng() * 6.28 });
     }
+    ctx.scene.add(bakeStatic(staticG));   // вся неподвижная арена — один вызов отрисовки
+
     // порталы спавна
     const SPAWNS: [number, number][] = [
       [0, -ARENA + 4], [0, ARENA - 4], [-ARENA + 4, 0], [ARENA - 4, 0],
@@ -260,7 +268,7 @@ export const doom: MiniGame3D = {
     const menuSkulls: THREE.Group[] = [];
     const menuEyes: THREE.PointLight[] = [];
     for (const side of [-1, 1]) {
-      const sk = buildProp('skull');
+      const sk = bakeStatic(buildProp('skull'));
       sk.userData.side = side;
       menuRig.add(sk);
       menuSkulls.push(sk);
@@ -406,13 +414,18 @@ export const doom: MiniGame3D = {
     // ── оружие в руках (воксель-модель у нижнего края) ──
     const gunGrp = new THREE.Group();
     cam.add(gunGrp);
+    // Все четыре ствола собраны один раз; переключение — только видимость.
+    // Раньше каждая смена оружия пересобирала модель и ничего не освобождала.
+    const gunModels: THREE.Group[] = [];
+    for (let i = 0; i < WEAPONS.length; i++) {
+      const gm = buildWeapon(i).grp;
+      gm.visible = false;
+      gunGrp.add(gm);
+      gunModels.push(gm);
+    }
     ctx.scene.add(cam);
-    const gunParts: THREE.Mesh[] = [];
     const buildGun = (idx: number) => {
-      for (const p of gunParts) gunGrp.remove(p);
-      gunParts.length = 0;
-      const { parts } = buildWeapon(idx);
-      for (const p of parts) { gunGrp.add(p); gunParts.push(p); }
+      for (let i = 0; i < gunModels.length; i++) gunModels[i].visible = i === idx;
     };
     let weapon = 0;
     const owned = [true, false, false];
@@ -497,9 +510,10 @@ export const doom: MiniGame3D = {
     const dust = createDustCloud(PUFF_MAX, 0.2);
     ctx.scene.add(dust.mesh);
     const instDummy = new THREE.Object3D();
+    const instCol = new THREE.Color();    // не плодим Color на каждую искру
 
     // ── монстры: модели из общей библиотеки (её же показывает /assets.html) ──
-    const buildMon = (k: MK, vet: boolean): { grp: THREE.Group; parts: THREE.Mesh[] } => {
+    const buildMon = (k: MK, vet: boolean) => {
       const r = buildMonster(k, vet);
       ctx.scene.add(r.grp);
       return r;
@@ -512,10 +526,10 @@ export const doom: MiniGame3D = {
     };
     const spawnMon = (k: MK, vet: boolean, sx: number, sz: number) => {
       const d = MDEFS[k];
-      const { grp, parts } = buildMon(k, vet);
+      const { grp, parts, mats, setFlash } = buildMon(k, vet);
       const hpMul = (vet ? 1.7 : 1) * (1 + 0.05 * wave);
       const m: Mon = {
-        kind: k, vet, grp, parts,
+        kind: k, vet, grp, parts, mats, setFlash,
         x: sx, z: sz, y: d.flying ? 2.2 : 0,
         hp: d.hp * hpMul, maxHp: d.hp * hpMul,
         vx: 0, vz: 0, t: 0, atkCd: 0, hurtT: 0,
@@ -534,7 +548,7 @@ export const doom: MiniGame3D = {
 
     function puff(x: number, y: number, z: number, col: number, max: number) {
       if (puffs.length >= PUFF_MAX) return;     // пул выбран — лишнюю искру просто не рисуем
-      puffs.push({ x, y, z, vy: 1.2 + rng(), life: 0, max, col: new THREE.Color(col) });
+      puffs.push({ x, y, z, vy: 1.2 + rng(), life: 0, max, col });
     }
 
     // ── гибы: кубики цвета монстра + красные ──
@@ -543,6 +557,7 @@ export const doom: MiniGame3D = {
       const d = MDEFS[m.kind];
       const base = new THREE.Color(d.color);
       if (m.vet) base.lerp(new THREE.Color(0x9a1010), 0.35);
+      const baseHex = base.getHex();
       const n = 10 + Math.floor(rng() * 6);
       for (let i = 0; i < n; i++) {
         if (gibs.length >= GIB_MAX) break;
@@ -553,12 +568,12 @@ export const doom: MiniGame3D = {
           rotX: rng() * 3, rotZ: rng() * 3,
           rx: (rng() - 0.5) * 12, rz: (rng() - 0.5) * 12,
           s: 0.14 + rng() * 0.2,
-          col: new THREE.Color(red ? C_GIB_RED : base),
+          col: red ? C_GIB_RED : baseHex,
           life: 2.6 + rng(),
         });
       }
       ctx.scene.remove(m.grp);
-      disposeTree(m.grp);        // ~15 геометрий и материалов на монстра — иначе утекают
+      for (const mt of m.mats) mt.dispose();   // геометрия общая на вариант — живёт в кеше
     };
 
     // ── пикапы ──
@@ -630,6 +645,7 @@ export const doom: MiniGame3D = {
       sfx.dispose();
       music.dispose();
       cam.remove(gunGrp);
+      disposeTree(gunGrp);       // четыре собранных ствола
       for (const im of [gibMesh, dust.mesh]) { im.geometry.dispose(); (im.material as THREE.Material).dispose(); im.dispose(); }
       ballGeo.dispose(); ballMat.dispose();
     };
@@ -789,7 +805,7 @@ export const doom: MiniGame3D = {
       return w2[Math.floor(rng() * w2.length)] ?? 'gnaar';
     };
     const restart = () => {
-      for (const m of mons) { m.wail?.stop(0.1); ctx.scene.remove(m.grp); disposeTree(m.grp); }
+      for (const m of mons) { m.wail?.stop(0.1); ctx.scene.remove(m.grp); for (const mt of m.mats) mt.dispose(); }
       mons.length = 0; alive = 0;
       for (const b of balls) {
         ballMeshes[b.mi].visible = false;
@@ -813,6 +829,30 @@ export const doom: MiniGame3D = {
       music.play('main', { fade: 0.8 });
       startWave();
     };
+
+    // ── прогрев шейдеров: всё компилируется на титуле, а не посреди боя ──
+    // (замер: первая встреча с материалом стоила 7.8 мс, счётчик ловил
+    // компиляцию программы уже в бою)
+    {
+      // геометрия всех 12 вариантов строится сейчас, а не при первом спавне
+      for (const kk of ['gnaar', 'boom', 'kleer', 'bull', 'harpy', 'mech'] as MK[]) {
+        for (const vv of [false, true]) {
+          const w = buildMonster(kk, vv);
+          for (const mt of w.mats) mt.dispose();
+        }
+      }
+      const warm = buildMonster('harpy', true);      // покрывает оба монстровых материала
+      warm.grp.position.set(0, -40, 0);
+      ctx.scene.add(warm.grp);
+      const wasHidden: THREE.Object3D[] = [];
+      for (const o of [...ballMeshes, ...rktMeshes]) {
+        if (!o.visible) { o.visible = true; wasHidden.push(o); }
+      }
+      ctx.compile();
+      for (const o of wasHidden) o.visible = false;
+      ctx.scene.remove(warm.grp);
+      for (const mt of warm.mats) mt.dispose();
+    }
 
     // ── HUD ──
     const g = ctx.hud;
@@ -945,7 +985,7 @@ export const doom: MiniGame3D = {
         ['файерболы', `${balls.length}/${BALL_MAX}`, false],
         ['ракеты', `${rockets.length}/${RKT_MAX} · ${ammo.rkt} шт`, false],
         ['волна / бюджет', `${wave} / ${waveBudget}`, false],
-        ['сложность', `${D.name} · потолок ${D.cap}`, false],
+        ['режим', `${D.name} · потолок ${D.cap}`, false],
       ];
       const pad = 8, lh = 15, w = 208;
       const h = rows.length * lh + pad * 2;
@@ -1630,13 +1670,9 @@ export const doom: MiniGame3D = {
         const mvSpd = Math.hypot(mvx, mvz) / Math.max(dt, 1e-4);
         const target = !d.ranged && mvSpd > 0.8 ? Math.atan2(-mvx, -mvz) : toPlayer;
         m.grp.rotation.y = turnTo(m.grp.rotation.y, target, 10);
-        // мигание при попадании
-        const hurtGlow = m.hurtT > 0;
-        for (const p of m.parts) {
-          const mm = p.material as THREE.MeshLambertMaterial;
-          if (hurtGlow) { if (!p.userData.oc) p.userData.oc = mm.color.getHex(); mm.color.setHex(0xffffff); }
-          else if (p.userData.oc) { mm.color.setHex(p.userData.oc as number); p.userData.oc = 0; }
-        }
+        // мигание при попадании: раньше перекрашивались все кубы, теперь
+        // одна униформа на слитый меш — вид тот же, работы на порядок меньше
+        m.setFlash(m.hurtT > 0);
 
         // атака
         const touchDist = d.radius + P_RADIUS + 0.35;
@@ -1788,7 +1824,7 @@ export const doom: MiniGame3D = {
         instDummy.scale.setScalar(gb.s);
         instDummy.updateMatrix();
         gibMesh.setMatrixAt(i, instDummy.matrix);
-        gibMesh.setColorAt(i, gb.col);
+        gibMesh.setColorAt(i, instCol.setHex(gb.col));
       }
       gibMesh.count = gibs.length;
       gibMesh.instanceMatrix.needsUpdate = true;
@@ -1804,7 +1840,7 @@ export const doom: MiniGame3D = {
       for (let i = 0; i < puffs.length; i++) {
         const p = puffs[i];
         const k = p.life / p.max;
-        dust.put(i, p.x, p.y, p.z, 1 + k * 1.8, p.col, 0.85 * (1 - k));   // раздувается, как и раньше
+        dust.put(i, p.x, p.y, p.z, 1 + k * 1.8, instCol.setHex(p.col), 0.85 * (1 - k));   // раздувается, как и раньше
       }
       dust.commit(puffs.length);
 

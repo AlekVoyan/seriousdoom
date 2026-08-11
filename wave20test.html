@@ -120,10 +120,10 @@ for (let i = 0; i < 40; i++) {
   scene.add(r.grp);
   let t = performance.now(); frame(); const spawnMs = performance.now() - t;
   scene.remove(r.grp);
-  t = performance.now(); disposeTree(r.grp); frame(); const dieMs = performance.now() - t;
+  t = performance.now(); for (const mt of r.mats) mt.dispose(); frame(); const dieMs = performance.now() - t;
   sumA += spawnMs + dieMs; worstA = Math.max(worstA, spawnMs, dieMs);
 }
-log(`  с dispose (как в игре):      ${(sumA/40).toFixed(2)} мс на цикл  (худший кадр ${worstA.toFixed(2)})`);
+log(`  как в игре (только материалы): ${(sumA/40).toFixed(2)} мс на цикл  (худший кадр ${worstA.toFixed(2)})`);
 
 // б) то же, но БЕЗ освобождения — чтобы отделить цену dispose
 let sumB = 0, worstB = 0;
@@ -133,7 +133,7 @@ for (let i = 0; i < 40; i++) {
   r.grp.position.set((Math.random()-.5)*30, 0, (Math.random()-.5)*30);
   scene.add(r.grp);
   let t = performance.now(); frame(); const spawnMs = performance.now() - t;
-  scene.remove(r.grp); leaked.push(r.grp);
+  scene.remove(r.grp); leaked.push(r);
   t = performance.now(); frame(); const dieMs = performance.now() - t;
   sumB += spawnMs + dieMs; worstB = Math.max(worstB, spawnMs, dieMs);
 }
@@ -141,13 +141,13 @@ log(`  без dispose (как было):      ${(sumB/40).toFixed(2)} мс на 
 log(`  обычный кадр для сравнения:  ${steady.toFixed(2)} мс`);
 const progAfter = renderer.info.programs.length;
 log(`  программ в кэше: ${progBefore} → ${progAfter}  ${progBefore === progAfter ? '(не пересобираются — хорошо)' : '(МЕНЯЕТСЯ — пересборка!)'}`);
-for (const g of leaked) disposeTree(g);
+for (const r of leaked) for (const mt of r.mats) mt.dispose();   // геометрия общая — не трогаем
 
 // ══ 3. ЧТО ЗАНИМАЕТ ВЫЗОВЫ ══
 log('\n3. РАСКЛАД ВЫЗОВОВ ОТРИСОВКИ В ПОЛНОМ КАДРЕ ВОЛНЫ 20\n');
 let monMeshes = 0;
 for (const g of live) g.traverse((o) => { if (o.isMesh) monMeshes++; });
-log(`  твари:            ${monMeshes} мешей (26 тварей × ~${(monMeshes/26).toFixed(0)} кубов)`);
+log(`  твари:            ${monMeshes} мешей на 26 тварей (кубы слиты в 1-2 меша)`);
 log(`  арена (пол/стены/пилоны/факелы): ~${13*13 + 5 + 10*2}`);
 log(`  печати:           ${pents.length * 4} (после слияния)`);
 log(`  частицы печатей:  ${pents.length}`);

@@ -29,6 +29,9 @@ export interface MiniGame3DContext {
   readonly input: InputState;
   /** показания прошлого кадра — для встроенного счётчика производительности */
   readonly perf: FramePerf;
+  /** скомпилировать шейдеры всего видимого сейчас — прогрев на титуле,
+   *  чтобы первая встреча с материалом не стоила кадра посреди боя */
+  compile(): void;
   onFrame(cb: (dt: number) => void): void;
   finish(result: MiniGameResult): void;
 }
@@ -263,7 +266,8 @@ export function runMiniGame3D(game: MiniGame3D, opts: MiniGameOpts = {}): Promis
     root.appendChild(hudCanvas);
     document.body.appendChild(root);
 
-    const renderer = new THREE.WebGLRenderer({ canvas: glCanvas, antialias: true });
+    // high-performance: на ноутбуках с двумя видеокартами просим дискретную
+    const renderer = new THREE.WebGLRenderer({ canvas: glCanvas, antialias: true, powerPreference: 'high-performance' });
     renderer.setClearColor(0x0b1020, 1);
     const scene = new THREE.Scene();
     // перспективная камера по флагу игры (persp), иначе — стандартная орто «под 2D»
@@ -343,6 +347,7 @@ export function runMiniGame3D(game: MiniGame3D, opts: MiniGameOpts = {}): Promis
       },
       input: input.state,
       perf,
+      compile() { renderer.compile(scene, camera); },
       onFrame(cb) {
         frameCb = cb;
       },

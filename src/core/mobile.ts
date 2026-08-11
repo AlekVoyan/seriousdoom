@@ -90,7 +90,18 @@ type G = CanvasRenderingContext2D;
  * g.font. family — напр. '"PixelHalf", ui-monospace, monospace'. Меняет g.font
  * как побочный эффект (на подобранный), так что можно сразу рисовать.
  */
+// Кеш подбора: measureText не бесплатен, а HUD зовёт fitFont до 13 раз за кадр
+// с одними и теми же строками. После загрузки шрифта метрики меняются — кеш
+// сбрасывается по fonts.ready, иначе заморозили бы размеры от запасного шрифта.
+const FIT_CACHE = new Map<string, string>();
+if (typeof document !== 'undefined') {
+  document.fonts?.ready?.then(() => FIT_CACHE.clear()).catch(() => { /* без Font API */ });
+}
+
 export function fitFont(g: G, text: string, maxW: number, maxPx: number, family: string, minPx = 9): string {
+  const key = `${maxPx}|${minPx}|${Math.round(maxW)}|${family}|${text}`;
+  const hit = FIT_CACHE.get(key);
+  if (hit) { g.font = hit; return hit; }
   let s = Math.round(maxPx);
   for (; s > minPx; s--) {
     g.font = `${s}px ${family}`;
@@ -98,6 +109,8 @@ export function fitFont(g: G, text: string, maxW: number, maxPx: number, family:
   }
   const f = `${s}px ${family}`;
   g.font = f;
+  if (FIT_CACHE.size > 400) FIT_CACHE.clear();   // потолок: тексты со счётчиками не копятся
+  FIT_CACHE.set(key, f);
   return f;
 }
 

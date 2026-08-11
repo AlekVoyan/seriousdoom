@@ -51,33 +51,75 @@ export const WEAPONS = [
 export const ROCKET = { splash: 45, radius: 4.5, self: 0.55, speed: 24, life: 3.2 };
 
 // ── монстры ───────────────────────────────────────────────────────────────
-export function buildMonster(k: MK, vet: boolean): { grp: THREE.Group; parts: THREE.Mesh[] } {
-  const d = MDEFS[k];
-  const grp = new THREE.Group();
-  const parts: THREE.Mesh[] = [];
+// Кубы монстра СЛИВАЮТСЯ в 1-2 меша с цветом в вершинах, а геометрия строится
+// один раз на вариант (тип × ветеран) и шарится между всеми экземплярами.
+// Было: ~12 мешей и ~12 материалов на монстра, пересборка на каждый спавн —
+// всплеск кадра 0.9-3.3 мс (замер perftest), на слабых машинах ×5-8.
+// Стало: спавн = 2 меша + 2 клона материала, заливка буферов один раз за игру.
+
+interface CubeSpec { w: number; h: number; d: number; c: number; x: number; y: number; z: number }
+interface WingSpec extends CubeSpec { side: number }
+
+/** кубы → одна геометрия; цвет каждого куба запечён в вершины (linear, как у材料) */
+function bakeCubes(list: CubeSpec[]): THREE.BufferGeometry | null {
+  if (!list.length) return null;
+  const tmp = new THREE.Color();
+  const geos = list.map((sp) => {
+    const g = new THREE.BoxGeometry(sp.w, sp.h, sp.d);
+    g.translate(sp.x, sp.y, sp.z);
+    tmp.set(sp.c);
+    const n = g.attributes.position.count;
+    const col = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) { col[i * 3] = tmp.r; col[i * 3 + 1] = tmp.g; col[i * 3 + 2] = tmp.b; }
+    g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    return g;
+  });
+  const merged = mergeGeometries(geos, false);
+  for (const g of geos) g.dispose();
+  return merged;
+}
+
+/**
+ * Материал монстра с per-экземпляр вспышкой.
+ * Раньше вспышка перекрашивала color каждого куба в белый; теперь кубы слиты,
+ * и то же самое делает униформа uFlash: диффуз заливается белым, а свечение
+ * остаётся цветным — ровно как было. Свечение по-прежнему «цвет куба × k»:
+ * в шейдер добавлено умножение emissive на цвет вершины.
+ */
+function monsterMaterial(emissiveK: number): { mat: THREE.MeshLambertMaterial; flash: { value: number } } {
+  const flash = { value: 0 };
+  const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
+  mat.emissive.setScalar(emissiveK);
+  mat.onBeforeCompile = (sh) => {
+    sh.uniforms.uFlash = flash;
+    sh.fragmentShader = `uniform float uFlash;\n${sh.fragmentShader}`
+      .replace('#include <color_fragment>',
+        '#include <color_fragment>\n\tdiffuseColor.rgb = mix(diffuseColor.rgb, vec3(1.0), uFlash);')
+      .replace('#include <emissivemap_fragment>',
+        '#include <emissivemap_fragment>\n\ttotalEmissiveRadiance *= vec3( vColor );');
+  };
+  mat.customProgramCacheKey = () => 'mon-flash';   // одна программа на всех монстров
+  return { mat, flash };
+}
+
+/** список кубов варианта — бывшее тело buildMonster, но без единого меша */
+function monsterCubes(k: MK, vet: boolean): { cold: CubeSpec[]; hot: CubeSpec[]; wings: WingSpec[] } {
+  const cold: CubeSpec[] = [];
+  const hot: CubeSpec[] = [];
+  const wings: WingSpec[] = [];
   // ветеран: цвет уходит в раскалённый багрянец — отличие видно за полкарты
-  const base = new THREE.Color(d.color);
+  const base = new THREE.Color(MDEFS[k].color);
   if (vet) base.lerp(new THREE.Color(0xb00c0c), 0.68).offsetHSL(0, 0.25, -0.04);
   const col = base.getHex();
   const VET_HOT = 0xff5a20;   // раскалённые накладки
   const VET_DARK = 0x2a0e0a;  // обугленная броня
-  const add = (w: number, h: number, dd: number, c: number, x: number, y: number, z: number) => {
-    const m = box(w, h, dd, c);
-    m.position.set(x, y, z);
-    const mm = m.material as THREE.MeshLambertMaterial;
-    mm.emissive = new THREE.Color(c).multiplyScalar(vet ? 0.42 : 0.22);
-    grp.add(m); parts.push(m);
-    return m;
-  };
-  /** раскалённая деталь ветерана (светится сама) */
-  const hot = (w: number, h: number, dd: number, x: number, y: number, z: number, c = VET_HOT) => {
-    const m = box(w, h, dd, c);
-    m.position.set(x, y, z);
-    const mm = m.material as THREE.MeshLambertMaterial;
-    mm.emissive = new THREE.Color(c).multiplyScalar(1.1);
-    grp.add(m); parts.push(m);
-    return m;
-  };
+  const add = (w: number, h: number, dd: number, c: number, x: number, y: number, z: number) =>
+    cold.push({ w, h, d: dd, c, x, y, z });
+  const hotC = (w: number, h: number, dd: number, x: number, y: number, z: number, c = VET_HOT) =>
+    hot.push({ w, h, d: dd, c, x, y, z });
+  const wing = (w: number, h: number, dd: number, x: number, y: number, z: number, side: number) =>
+    wings.push({ w, h, d: dd, c: col, x, y, z, side });
+
   if (k === 'gnaar') {
     add(1.0, 0.9, 0.7, col, 0, 0.5, 0);
     add(0.8, 0.5, 0.6, col, 0, 1.2, 0.05);
@@ -123,9 +165,8 @@ export function buildMonster(k: MK, vet: boolean): { grp: THREE.Group; parts: TH
     add(0.28, 0.1, 0.1, 0xe0a040, 0, 0.68, -0.28);
     add(0.1, 0.12, 0.1, 0xffe060, -0.1, 0.78, -0.2);
     add(0.1, 0.12, 0.1, 0xffe060, 0.1, 0.78, -0.2);
-    const wl = add(0.9, 0.1, 0.5, col, -0.66, 0.45, 0.05);
-    const wr = add(0.9, 0.1, 0.5, col, 0.66, 0.45, 0.05);
-    wl.userData.wing = -1; wr.userData.wing = 1;
+    wing(0.9, 0.1, 0.5, -0.66, 0.45, 0.05, -1);
+    wing(0.9, 0.1, 0.5, 0.66, 0.45, 0.05, 1);
     add(0.14, 0.34, 0.14, 0xe0a040, -0.14, -0.05, 0);
     add(0.14, 0.34, 0.14, 0xe0a040, 0.14, -0.05, 0);
   } else {
@@ -146,28 +187,28 @@ export function buildMonster(k: MK, vet: boolean): { grp: THREE.Group; parts: TH
   if (vet) {
     if (k === 'gnaar') {
       // гребень раскалённых шипов вдоль горба + налитый кровью глаз
-      for (let i = 0; i < 4; i++) hot(0.16, 0.3 + i * 0.06, 0.16, 0, 1.5 + i * 0.02, 0.28 - i * 0.19);
-      hot(0.4, 0.4, 0.1, 0, 1.25, -0.4, 0xff2a10);
+      for (let i = 0; i < 4; i++) hotC(0.16, 0.3 + i * 0.06, 0.16, 0, 1.5 + i * 0.02, 0.28 - i * 0.19);
+      hotC(0.4, 0.4, 0.1, 0, 1.25, -0.4, 0xff2a10);
       add(0.24, 0.5, 0.24, VET_DARK, -0.78, 0.8, 0);   // наплечники
       add(0.24, 0.5, 0.24, VET_DARK, 0.78, 0.8, 0);
     } else if (k === 'boom') {
       // пояс шашек и вторая пара зарядов — взрыв мощнее
-      for (let i = -1; i <= 1; i++) hot(0.16, 0.3, 0.16, i * 0.24, 0.5, -0.3, 0xff7a20);
+      for (let i = -1; i <= 1; i++) hotC(0.16, 0.3, 0.16, i * 0.24, 0.5, -0.3, 0xff7a20);
       add(0.8, 0.14, 0.55, VET_DARK, 0, 0.42, 0);
       for (const sx of [-0.62, 0.62]) {
         add(0.3, 0.3, 0.3, 0x1a1a1e, sx, 0.55, -0.1);
-        hot(0.1, 0.14, 0.1, sx, 0.76, -0.1, 0xff2a10);
+        hotC(0.1, 0.14, 0.1, sx, 0.76, -0.1, 0xff2a10);
       }
-      hot(0.36, 0.1, 0.3, 0, 1.46, 0, 0xff2a10);        // тлеющий обрубок шеи
+      hotC(0.36, 0.1, 0.3, 0, 1.46, 0, 0xff2a10);        // тлеющий обрубок шеи
     } else if (k === 'kleer') {
       // костяная корона из рогов + раскалённые глазницы + шпоры
       for (let i = -2; i <= 2; i++) {
         const a = i * 0.34;
         add(0.1, 0.32 + Math.abs(i) * -0.05, 0.1, 0xf0e8d0, Math.sin(a) * 0.24, 2.02, Math.cos(a) * 0.1 - 0.02);
       }
-      hot(0.13, 0.15, 0.1, -0.11, 1.76, -0.22, 0xff2a10);
-      hot(0.13, 0.15, 0.1, 0.11, 1.76, -0.22, 0xff2a10);
-      for (const sx of [-0.42, 0.42]) hot(0.09, 0.24, 0.09, sx, 0.62, -0.26);
+      hotC(0.13, 0.15, 0.1, -0.11, 1.76, -0.22, 0xff2a10);
+      hotC(0.13, 0.15, 0.1, 0.11, 1.76, -0.22, 0xff2a10);
+      for (const sx of [-0.42, 0.42]) hotC(0.09, 0.24, 0.09, sx, 0.62, -0.26);
       add(0.36, 0.5, 0.2, VET_DARK, 0, 1.2, 0.16);      // нагрудная пластина
     } else if (k === 'bull') {
       // вторая пара рогов, лобовая броня, раскалённые ноздри и хребет
@@ -176,30 +217,91 @@ export function buildMonster(k: MK, vet: boolean): { grp: THREE.Group; parts: TH
         add(0.14, 0.22, 0.14, 0xe8e0c8, sx, 1.16, -1.2);
       }
       add(0.86, 0.3, 0.2, VET_DARK, 0, 1.42, -0.92);    // налобник
-      hot(0.12, 0.1, 0.12, -0.16, 0.95, -1.14, 0xff7a20);
-      hot(0.12, 0.1, 0.12, 0.16, 0.95, -1.14, 0xff7a20);
-      for (let i = 0; i < 3; i++) hot(0.13, 0.26, 0.13, 0, 1.5, -0.2 + i * 0.34);  // хребет
+      hotC(0.12, 0.1, 0.12, -0.16, 0.95, -1.14, 0xff7a20);
+      hotC(0.12, 0.1, 0.12, 0.16, 0.95, -1.14, 0xff7a20);
+      for (let i = 0; i < 3; i++) hotC(0.13, 0.26, 0.13, 0, 1.5, -0.2 + i * 0.34);  // хребет
     } else if (k === 'harpy') {
       // второй ярус крыльев, гребень и раскалённый хвост
-      const wl2 = add(0.66, 0.09, 0.36, col, -0.5, 0.18, 0.16);
-      const wr2 = add(0.66, 0.09, 0.36, col, 0.5, 0.18, 0.16);
-      wl2.userData.wing = -1; wr2.userData.wing = 1;
-      for (let i = 0; i < 3; i++) hot(0.09, 0.18 - i * 0.03, 0.09, 0, 0.9, -0.02 + i * 0.14);
-      hot(0.12, 0.1, 0.5, 0, 0.28, 0.44, 0xff5a20);     // хвост-уголёк
+      wing(0.66, 0.09, 0.36, -0.5, 0.18, 0.16, -1);
+      wing(0.66, 0.09, 0.36, 0.5, 0.18, 0.16, 1);
+      for (let i = 0; i < 3; i++) hotC(0.09, 0.18 - i * 0.03, 0.09, 0, 0.9, -0.02 + i * 0.14);
+      hotC(0.12, 0.1, 0.5, 0, 0.28, 0.44, 0xff5a20);     // хвост-уголёк
     } else {
       // третья пушка, антенна, реактор и наплечная броня
       add(0.34, 0.34, 0.7, 0x2c333c, 0, 2.05, -0.5);
       add(0.2, 0.2, 0.2, 0x1a1e24, 0, 2.05, -0.92);
       add(0.1, 0.7, 0.1, 0x2c333c, 0.42, 2.95, 0);
-      hot(0.14, 0.14, 0.14, 0.42, 3.34, 0, 0xff2a10);   // маячок на антенне
-      hot(0.42, 0.42, 0.16, 0, 1.5, 0.46, 0xff5a20);    // реактор в спине
+      hotC(0.14, 0.14, 0.14, 0.42, 3.34, 0, 0xff2a10);   // маячок на антенне
+      hotC(0.42, 0.42, 0.16, 0, 1.5, 0.46, 0xff5a20);    // реактор в спине
       for (const sx of [-0.62, 0.62]) add(0.36, 0.22, 0.6, VET_DARK, sx, 2.1, 0);
     }
   }
-  return { grp, parts };
+  return { cold, hot, wings };
 }
 
-// ── оружие в руках ────────────────────────────────────────────────────────
+interface MonsterVariant {
+  cold: THREE.BufferGeometry;
+  hot: THREE.BufferGeometry | null;
+  wings: { geo: THREE.BufferGeometry; x: number; y: number; z: number; side: number }[];
+}
+const MON_VARIANTS = new Map<string, MonsterVariant>();
+
+function monsterVariant(k: MK, vet: boolean): MonsterVariant {
+  const key = `${k}|${vet ? 1 : 0}`;
+  let v = MON_VARIANTS.get(key);
+  if (!v) {
+    const { cold, hot, wings } = monsterCubes(k, vet);
+    v = {
+      cold: bakeCubes(cold)!,
+      hot: bakeCubes(hot),
+      // крыло — своя геометрия с центром в точке машущего сустава (position задаёт экземпляр)
+      wings: wings.map((w) => ({
+        geo: bakeCubes([{ w: w.w, h: w.h, d: w.d, c: w.c, x: 0, y: 0, z: 0 }])!,
+        x: w.x, y: w.y, z: w.z, side: w.side,
+      })),
+    };
+    MON_VARIANTS.set(key, v);
+  }
+  return v;
+}
+
+export interface MonsterBuild {
+  grp: THREE.Group;
+  /** анимируемые части (крылья гарпии); тело слито в 1-2 меша */
+  parts: THREE.Mesh[];
+  /** клоны материалов экземпляра — освободить при смерти (геометрия общая, её не трогать) */
+  mats: THREE.Material[];
+  /** вспышка при попадании — то же «всё белое», что раньше делалось перекраской кубов */
+  setFlash(on: boolean): void;
+}
+
+export function buildMonster(k: MK, vet: boolean): MonsterBuild {
+  const v = monsterVariant(k, vet);
+  const grp = new THREE.Group();
+  const parts: THREE.Mesh[] = [];
+  const cold = monsterMaterial(vet ? 0.42 : 0.22);
+  const mats: THREE.Material[] = [cold.mat];
+  const flashes = [cold.flash];
+  grp.add(new THREE.Mesh(v.cold, cold.mat));
+  if (v.hot) {
+    const h = monsterMaterial(1.1);
+    mats.push(h.mat);
+    flashes.push(h.flash);
+    grp.add(new THREE.Mesh(v.hot, h.mat));
+  }
+  for (const w of v.wings) {
+    const m = new THREE.Mesh(w.geo, cold.mat);
+    m.position.set(w.x, w.y, w.z);
+    m.userData.wing = w.side;
+    grp.add(m);
+    parts.push(m);
+  }
+  return {
+    grp, parts, mats,
+    setFlash(on) { const f = on ? 1 : 0; for (const fl of flashes) fl.value = f; },
+  };
+}
+
 export function buildWeapon(idx: number): { grp: THREE.Group; parts: THREE.Mesh[] } {
   const grp = new THREE.Group();
   const parts: THREE.Mesh[] = [];
@@ -238,7 +340,54 @@ export function buildWeapon(idx: number): { grp: THREE.Group; parts: THREE.Mesh[
 }
 
 // ── пикапы ────────────────────────────────────────────────────────────────
+/** общий материал всех запечённых статик: цвет в вершинах, одна программа */
+const BAKED_MAT = new THREE.MeshLambertMaterial({ vertexColors: true });
+
+/**
+ * Слить группу неподвижных кубов в один меш (цвет — в вершинах).
+ * Сливаются только простые Lambert-кубы без свечения и прозрачности; всё
+ * остальное (угли, пламя, предупреждающие огни) остаётся отдельными мешами.
+ * Работает по прямым детям; звать ДО позиционирования группы.
+ */
+export function bakeStatic(src: THREE.Group): THREE.Group {
+  const out = new THREE.Group();
+  const geos: THREE.BufferGeometry[] = [];
+  const tmp = new THREE.Color();
+  for (const o of [...src.children]) {
+    const m = o as THREE.Mesh;
+    const mat = m.material as THREE.MeshLambertMaterial | undefined;
+    const plain = !!(m.isMesh && mat && (mat as { isMeshLambertMaterial?: boolean }).isMeshLambertMaterial
+      && !mat.transparent && mat.emissive.getHex() === 0);
+    if (!plain) { out.add(o); continue; }              // переезжает как есть
+    m.updateMatrix();
+    const g = (m.geometry as THREE.BufferGeometry).clone().applyMatrix4(m.matrix);
+    tmp.copy(mat.color);
+    const n = g.attributes.position.count;
+    const col = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) { col[i * 3] = tmp.r; col[i * 3 + 1] = tmp.g; col[i * 3 + 2] = tmp.b; }
+    g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    geos.push(g);
+    (m.geometry as THREE.BufferGeometry).dispose();
+    mat.dispose();
+  }
+  if (geos.length) {
+    const merged = mergeGeometries(geos, false)!;
+    for (const g of geos) g.dispose();
+    out.add(new THREE.Mesh(merged, BAKED_MAT));
+  }
+  return out;
+}
+
+/** шаблоны пикапов: геометрия и материалы общие, экземпляр — дешёвый clone() */
+const PICKUP_TPL = new Map<PickupKind, THREE.Group>();
+
 export function buildPickup(kind: PickupKind): THREE.Group {
+  let t = PICKUP_TPL.get(kind);
+  if (!t) { t = bakeStatic(rawPickup(kind)); PICKUP_TPL.set(kind, t); }
+  return t.clone();
+}
+
+function rawPickup(kind: PickupKind): THREE.Group {
   const grp = new THREE.Group();
   if (kind === 'med') {
     const b = box(0.5, 0.34, 0.5, 0xe8e4dc); b.position.y = 0.3; grp.add(b);
