@@ -45,10 +45,10 @@ export const WEAPONS = [
   { name: 'ПИСТОЛЕТ', dmg: 15, cd: 0.36, spread: 0.02, pellets: 1, ammo: 'bul' as const, use: 1, unlock: 'старт' },
   { name: 'ДРОБОВИК', dmg: 10, cd: 0.82, spread: 0.13, pellets: 7, ammo: 'shl' as const, use: 1, unlock: 'волна 3' },
   { name: 'ПУЛЕМЁТ', dmg: 11, cd: 0.09, spread: 0.055, pellets: 1, ammo: 'bul' as const, use: 1, unlock: 'волна 6' },
-  { name: 'РАКЕТНИЦА', dmg: 60, cd: 0.95, spread: 0, pellets: 1, ammo: 'rkt' as const, use: 1, unlock: 'волна 16 — лежит на арене' },
+  { name: 'РАКЕТНИЦА', dmg: 90, cd: 0.95, spread: 0, pellets: 1, ammo: 'rkt' as const, use: 1, unlock: 'волна 16 — лежит на арене' },
 ];
 /** осколочный урон ракеты: в эпицентре SPLASH, до нуля на SPLASH_R; себе — ×SELF */
-export const ROCKET = { splash: 45, radius: 4.5, self: 0.55, speed: 24, life: 3.2 };
+export const ROCKET = { splash: 70, radius: 5.5, self: 0.35, speed: 24, life: 3.2 };   // self×splash ≈ 25 в упор — риск как был
 
 // ── монстры ───────────────────────────────────────────────────────────────
 // Кубы монстра СЛИВАЮТСЯ в 1-2 меша с цветом в вершинах, а геометрия строится

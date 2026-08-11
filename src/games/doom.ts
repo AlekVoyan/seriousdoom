@@ -116,7 +116,7 @@ const WEAPONS = [
   { name: 'ПИСТОЛЕТ', dmg: 15, cd: 0.36, spread: 0.02, pellets: 1, ammo: 'bul' as const, use: 1 },
   { name: 'ДРОБОВИК', dmg: 10, cd: 0.82, spread: 0.13, pellets: 7, ammo: 'shl' as const, use: 1 },
   { name: 'ПУЛЕМЁТ', dmg: 11, cd: 0.09, spread: 0.055, pellets: 1, ammo: 'bul' as const, use: 1 },
-  { name: 'РАКЕТНИЦА', dmg: 60, cd: 0.95, spread: 0, pellets: 1, ammo: 'rkt' as const, use: 1 },
+  { name: 'РАКЕТНИЦА', dmg: 90, cd: 0.95, spread: 0, pellets: 1, ammo: 'rkt' as const, use: 1 },
 ];
 /** волна, на которой ракетница появляется на арене (после зачистки 15-й) */
 const RKT_WAVE = 16;
@@ -756,11 +756,11 @@ export const doom: MiniGame3D = {
       sfx.play('explosion', { x: bx, z: bz });
       muzzleLight.position.set(bx, by, bz);
       muzzleLight.intensity = 8;
-      for (let q = 0; q < 20; q++) {
-        puff(bx + (rng() - 0.5) * 2.4, by + (rng() - 0.5) * 1.8, bz + (rng() - 0.5) * 2.4,
-          q % 3 ? 0xff8030 : 0xffe090, 0.5);
+      for (let q = 0; q < 26; q++) {
+        puff(bx + (rng() - 0.5) * 3.2, by + (rng() - 0.5) * 2.2, bz + (rng() - 0.5) * 3.2,
+          q % 3 ? 0xff8030 : 0xffe090, 0.55);
       }
-      // тому, в кого воткнулась ракета, — полные 60 прямого урона ДО осколков
+      // тому, в кого воткнулась ракета, — полный прямой урон ДО осколков
       if (direct) direct.hp -= WEAPONS[3].dmg;
       // осколки — по спаду от ЭПИЦЕНТРА ДО КРАЯ твари: взрыв происходит на её
       // границе, и если мерить до центра, цель в упор получала бы 33 вместо 45
