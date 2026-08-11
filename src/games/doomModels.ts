@@ -55,7 +55,12 @@ export const ROCKET = { splash: 70, radius: 5.5, self: 0.35, speed: 24, life: 3.
 // редактор его же редактирует. Стены, пол и лава фиксированы (границы ±26).
 
 export type ArenaPickupKind = 'med' | 'arm' | 'bul' | 'shl' | 'box';
+export type ArenaSky = 'hell' | 'dusk' | 'day';
 export interface ArenaDef {
+  /** полуразмер арены в метрах (стены на ±size), чётный, 16..40 */
+  size: number;
+  /** небо: пекло (как было), закат, открытый день */
+  sky: ArenaSky;
   pillars: { x: number; z: number; r: number }[];
   torches: { x: number; z: number }[];
   /** печати спавна; меньше двух — арена неиграбельна */
@@ -68,6 +73,8 @@ export interface ArenaDef {
 export const ARENA_CAPS = { pillars: 14, torches: 12, seals: 10, pickups: 24 } as const;
 
 export const DEFAULT_ARENA: ArenaDef = {
+  size: 26,
+  sky: 'hell',
   pillars: [
     { x: -11, z: -11, r: 1.6 }, { x: 11, z: -11, r: 1.6 },
     { x: -11, z: 11, r: 1.6 }, { x: 11, z: 11, r: 1.6 },
@@ -94,6 +101,80 @@ export const DEFAULT_ARENA: ArenaDef = {
   start: { x: 0, z: 14 },
 };
 
+/**
+ * Встроенные арены-референсы. Обе проверены на пересечения теми же правилами,
+ * что использует редактор.
+ */
+export const BUILTIN_ARENAS: { name: string; def: ArenaDef }[] = [
+  {
+    // Оммаж двору Великой пирамиды из Serious Sam TFE: гигантский простор под
+    // дневным небом, обелиск в центре, две колоннады, спавн со всех сторон.
+    name: 'ПІРАМІДА',
+    def: {
+      size: 38,
+      sky: 'day',
+      pillars: [
+        { x: 0, z: 0, r: 2.6 },
+        { x: -18, z: -18, r: 1.6 }, { x: -18, z: -6, r: 1.6 }, { x: -18, z: 6, r: 1.6 }, { x: -18, z: 18, r: 1.6 },
+        { x: 18, z: -18, r: 1.6 }, { x: 18, z: -6, r: 1.6 }, { x: 18, z: 6, r: 1.6 }, { x: 18, z: 18, r: 1.6 },
+      ],
+      torches: [
+        { x: -37, z: -20 }, { x: -37, z: 0 }, { x: -37, z: 20 },
+        { x: 37, z: -20 }, { x: 37, z: 0 }, { x: 37, z: 20 },
+        { x: -20, z: -37 }, { x: 20, z: -37 }, { x: -20, z: 37 }, { x: 20, z: 37 },
+        { x: 0, z: -37 }, { x: 0, z: 37 },
+      ],
+      seals: [
+        { x: 0, z: -32 }, { x: 0, z: 32 }, { x: -32, z: 0 }, { x: 32, z: 0 },
+        { x: -24, z: -24 }, { x: 24, z: -24 }, { x: -24, z: 24 }, { x: 24, z: 24 },
+        { x: -12, z: -32 }, { x: 12, z: -32 },
+      ],
+      pickups: [
+        { kind: 'bul', x: 12, z: 0 }, { kind: 'bul', x: -12, z: 0 },
+        { kind: 'bul', x: 18, z: -12 }, { kind: 'bul', x: -18, z: 12 },
+        { kind: 'med', x: -33, z: -33 }, { kind: 'med', x: 33, z: 33 },
+        { kind: 'med', x: -33, z: 33 }, { kind: 'med', x: 33, z: -33 },
+        { kind: 'arm', x: 0, z: -20 }, { kind: 'arm', x: 0, z: 20 },
+        { kind: 'box', x: -6, z: -6 }, { kind: 'box', x: 6, z: 6 },
+        { kind: 'shl', x: 18, z: 12 }, { kind: 'shl', x: -18, z: -12 },
+        { kind: 'shl', x: 0, z: 10 }, { kind: 'bul', x: 28, z: 28 },
+      ],
+      start: { x: 0, z: 28 },
+    },
+  },
+  {
+    // Оммаж Campgrounds (Q3DM6) из Quake 3: тесные дворики, колонны, мегааптечка
+    // в центре, которую страшно брать. Сумеречное небо.
+    name: 'КЕМПГРАУНД',
+    def: {
+      size: 22,
+      sky: 'dusk',
+      pillars: [
+        { x: -8, z: -8, r: 1.6 }, { x: 8, z: -8, r: 1.6 }, { x: -8, z: 8, r: 1.6 }, { x: 8, z: 8, r: 1.6 },
+        { x: 0, z: -13, r: 1.6 }, { x: 0, z: 13, r: 1.6 }, { x: -14, z: 0, r: 1.6 }, { x: 14, z: 0, r: 1.6 },
+        { x: -15, z: -15, r: 1.6 }, { x: 15, z: -15, r: 1.6 }, { x: -15, z: 15, r: 1.6 }, { x: 15, z: 15, r: 1.6 },
+      ],
+      torches: [
+        { x: -21, z: -10 }, { x: -21, z: 10 }, { x: 21, z: -10 }, { x: 21, z: 10 },
+        { x: -10, z: -21 }, { x: 10, z: -21 }, { x: -10, z: 21 }, { x: 10, z: 21 },
+      ],
+      seals: [
+        { x: -6, z: -18 }, { x: 6, z: 18 }, { x: -19, z: -6 }, { x: 19, z: -6 },
+        { x: -19, z: 6 }, { x: 19, z: 6 },
+      ],
+      pickups: [
+        { kind: 'bul', x: 4, z: 0 }, { kind: 'bul', x: -4, z: 0 },
+        { kind: 'bul', x: 11, z: -11 }, { kind: 'bul', x: -11, z: 11 },
+        { kind: 'med', x: 0, z: 4 }, { kind: 'med', x: -11, z: -11 }, { kind: 'med', x: 11, z: 11 },
+        { kind: 'arm', x: 0, z: -4 },
+        { kind: 'box', x: -19, z: 0 }, { kind: 'box', x: 19, z: 0 },
+        { kind: 'shl', x: 0, z: -9 }, { kind: 'shl', x: 0, z: 9 },
+      ],
+      start: { x: 0, z: 17 },
+    },
+  },
+];
+
 /** проверка арены из localStorage/импорта: чужому JSON веры нет */
 export function validateArena(raw: unknown): ArenaDef | null {
   if (!raw || typeof raw !== 'object') return null;
@@ -101,35 +182,40 @@ export function validateArena(raw: unknown): ArenaDef | null {
   const num = (v: unknown, lim: number): number | null =>
     typeof v === 'number' && Number.isFinite(v) ? Math.max(-lim, Math.min(lim, Math.round(v))) : null;
   const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
-  const out: ArenaDef = { pillars: [], torches: [], seals: [], pickups: [], start: { x: 0, z: 14 } };
+  const size = typeof o.size === 'number' && Number.isFinite(o.size)
+    ? Math.max(16, Math.min(40, Math.round(o.size / 2) * 2))
+    : 26;
+  const sky: ArenaSky = o.sky === 'day' || o.sky === 'dusk' ? o.sky : 'hell';
+  const out: ArenaDef = { size, sky, pillars: [], torches: [], seals: [], pickups: [], start: { x: 0, z: 14 } };
+  const B = size - 2;   // общая граница объектов
 
   for (const it of arr(o.pillars).slice(0, ARENA_CAPS.pillars)) {
     const e = it as Record<string, unknown>;
-    const x = num(e.x, 23), z = num(e.z, 23);
+    const x = num(e.x, B), z = num(e.z, B);
     const r = typeof e.r === 'number' && Number.isFinite(e.r) ? Math.max(1, Math.min(3, e.r)) : null;
     if (x !== null && z !== null && r !== null) out.pillars.push({ x, z, r });
   }
   for (const it of arr(o.torches).slice(0, ARENA_CAPS.torches)) {
     const e = it as Record<string, unknown>;
-    const x = num(e.x, 25), z = num(e.z, 25);
+    const x = num(e.x, size - 1), z = num(e.z, size - 1);
     if (x !== null && z !== null) out.torches.push({ x, z });
   }
   for (const it of arr(o.seals).slice(0, ARENA_CAPS.seals)) {
     const e = it as Record<string, unknown>;
-    const x = num(e.x, 23), z = num(e.z, 23);
+    const x = num(e.x, B), z = num(e.z, B);
     if (x !== null && z !== null) out.seals.push({ x, z });
   }
   const kinds: ArenaPickupKind[] = ['med', 'arm', 'bul', 'shl', 'box'];
   for (const it of arr(o.pickups).slice(0, ARENA_CAPS.pickups)) {
     const e = it as Record<string, unknown>;
-    const x = num(e.x, 24), z = num(e.z, 24);
+    const x = num(e.x, B), z = num(e.z, B);
     if (x !== null && z !== null && kinds.includes(e.kind as ArenaPickupKind)) {
       out.pickups.push({ kind: e.kind as ArenaPickupKind, x, z });
     }
   }
   const st = (o.start ?? {}) as Record<string, unknown>;
-  out.start.x = num(st.x, 23) ?? 0;
-  out.start.z = num(st.z, 23) ?? 14;
+  out.start.x = num(st.x, B) ?? 0;
+  out.start.z = num(st.z, B) ?? Math.min(14, B);
   if (out.seals.length < 2) return null;
   return out;
 }
