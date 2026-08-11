@@ -50,6 +50,90 @@ export const WEAPONS = [
 /** осколочный урон ракеты: в эпицентре SPLASH, до нуля на SPLASH_R; себе — ×SELF */
 export const ROCKET = { splash: 70, radius: 5.5, self: 0.35, speed: 24, life: 3.2 };   // self×splash ≈ 25 в упор — риск как был
 
+// ── АРЕНА КАК ДАННЫЕ ──────────────────────────────────────────────────────
+// Всё переменное на арене описывается ArenaDef: игра строит уровень из него,
+// редактор его же редактирует. Стены, пол и лава фиксированы (границы ±26).
+
+export type ArenaPickupKind = 'med' | 'arm' | 'bul' | 'shl' | 'box';
+export interface ArenaDef {
+  pillars: { x: number; z: number; r: number }[];
+  torches: { x: number; z: number }[];
+  /** печати спавна; меньше двух — арена неиграбельна */
+  seals: { x: number; z: number }[];
+  pickups: { kind: ArenaPickupKind; x: number; z: number }[];
+  start: { x: number; z: number };
+}
+
+/** потолки редактора: света на арене конечное число, драйвер скажет спасибо */
+export const ARENA_CAPS = { pillars: 14, torches: 12, seals: 10, pickups: 24 } as const;
+
+export const DEFAULT_ARENA: ArenaDef = {
+  pillars: [
+    { x: -11, z: -11, r: 1.6 }, { x: 11, z: -11, r: 1.6 },
+    { x: -11, z: 11, r: 1.6 }, { x: 11, z: 11, r: 1.6 },
+    { x: 0, z: 0, r: 2.2 },
+  ],
+  torches: [
+    { x: -25, z: -14 }, { x: -25, z: 0 }, { x: -25, z: 14 },
+    { x: 25, z: -14 }, { x: 25, z: 0 }, { x: 25, z: 14 },
+    { x: -14, z: -25 }, { x: 14, z: -25 }, { x: -14, z: 25 }, { x: 14, z: 25 },
+  ],
+  seals: [
+    { x: 0, z: -22 }, { x: 0, z: 22 }, { x: -22, z: 0 }, { x: 22, z: 0 },
+    { x: -17, z: -17 }, { x: 17, z: -17 }, { x: -17, z: 17 }, { x: 17, z: 17 },
+  ],
+  pickups: [
+    // первый «bul» в списке НЕ меняется на ракеты после 16-й волны — порядок важен
+    { kind: 'bul', x: 19, z: -3 },
+    { kind: 'bul', x: -6, z: -18 }, { kind: 'bul', x: 6, z: 18 }, { kind: 'bul', x: -19, z: 12 },
+    { kind: 'med', x: -18, z: -6 }, { kind: 'med', x: 18, z: 6 }, { kind: 'med', x: 12, z: -4 },
+    { kind: 'arm', x: 0, z: -19 }, { kind: 'arm', x: 0, z: 19 },
+    { kind: 'box', x: -21, z: -21 }, { kind: 'box', x: 21, z: 21 },
+    { kind: 'shl', x: 19, z: -12 }, { kind: 'shl', x: -12, z: 4 }, { kind: 'shl', x: 4, z: -21 },
+  ],
+  start: { x: 0, z: 14 },
+};
+
+/** проверка арены из localStorage/импорта: чужому JSON веры нет */
+export function validateArena(raw: unknown): ArenaDef | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  const num = (v: unknown, lim: number): number | null =>
+    typeof v === 'number' && Number.isFinite(v) ? Math.max(-lim, Math.min(lim, Math.round(v))) : null;
+  const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
+  const out: ArenaDef = { pillars: [], torches: [], seals: [], pickups: [], start: { x: 0, z: 14 } };
+
+  for (const it of arr(o.pillars).slice(0, ARENA_CAPS.pillars)) {
+    const e = it as Record<string, unknown>;
+    const x = num(e.x, 23), z = num(e.z, 23);
+    const r = typeof e.r === 'number' && Number.isFinite(e.r) ? Math.max(1, Math.min(3, e.r)) : null;
+    if (x !== null && z !== null && r !== null) out.pillars.push({ x, z, r });
+  }
+  for (const it of arr(o.torches).slice(0, ARENA_CAPS.torches)) {
+    const e = it as Record<string, unknown>;
+    const x = num(e.x, 25), z = num(e.z, 25);
+    if (x !== null && z !== null) out.torches.push({ x, z });
+  }
+  for (const it of arr(o.seals).slice(0, ARENA_CAPS.seals)) {
+    const e = it as Record<string, unknown>;
+    const x = num(e.x, 23), z = num(e.z, 23);
+    if (x !== null && z !== null) out.seals.push({ x, z });
+  }
+  const kinds: ArenaPickupKind[] = ['med', 'arm', 'bul', 'shl', 'box'];
+  for (const it of arr(o.pickups).slice(0, ARENA_CAPS.pickups)) {
+    const e = it as Record<string, unknown>;
+    const x = num(e.x, 24), z = num(e.z, 24);
+    if (x !== null && z !== null && kinds.includes(e.kind as ArenaPickupKind)) {
+      out.pickups.push({ kind: e.kind as ArenaPickupKind, x, z });
+    }
+  }
+  const st = (o.start ?? {}) as Record<string, unknown>;
+  out.start.x = num(st.x, 23) ?? 0;
+  out.start.z = num(st.z, 23) ?? 14;
+  if (out.seals.length < 2) return null;
+  return out;
+}
+
 // ── монстры ───────────────────────────────────────────────────────────────
 // Кубы монстра СЛИВАЮТСЯ в 1-2 меша с цветом в вершинах, а геометрия строится
 // один раз на вариант (тип × ветеран) и шарится между всеми экземплярами.
@@ -342,6 +426,7 @@ export function buildWeapon(idx: number): { grp: THREE.Group; parts: THREE.Mesh[
 // ── пикапы ────────────────────────────────────────────────────────────────
 /** общий материал всех запечённых статик: цвет в вершинах, одна программа */
 const BAKED_MAT = new THREE.MeshLambertMaterial({ vertexColors: true });
+BAKED_MAT.userData.shared = true;   // общий на все запечённые статики — не освобождать
 
 /**
  * Слить группу неподвижных кубов в один меш (цвет — в вершинах).

@@ -3,7 +3,7 @@ import type { MiniGameOpts } from '../core/types';
 import { makeRng } from '../core/rng';
 import { box, type MiniGame3D, type MiniGame3DContext } from '../core/three3d';
 import { isTouchDevice, createMultiTouch, inCircle, drawButton, fitFont } from '../core/mobile';
-import { createPentagram, createEmberCloud, createDustCloud, buildMonster, buildWeapon, buildPickup, buildProp, buildRocket, bakeStatic, ROCKET, type Pentagram } from './doomModels';
+import { createPentagram, createEmberCloud, createDustCloud, buildMonster, buildWeapon, buildPickup, buildProp, buildRocket, bakeStatic, ROCKET, DEFAULT_ARENA, ARENA_CAPS, validateArena, type ArenaDef, type Pentagram } from './doomModels';
 import { createDoomAudio, type SfxId, type SfxLoop } from '../core/audioDoom';
 import { createMusicDirector } from '../core/musicDirector';
 
@@ -146,19 +146,46 @@ export const doom: MiniGame3D = {
     ctx.scene.background = new THREE.Color(0x2a0a08);
     ctx.scene.fog = new THREE.Fog(0x300c08, 22, 80);
 
-    // всё неподвижное копится здесь и в конце сливается в ОДИН меш:
-    // пол (169 плиток), стены с отбойниками, пилоны, кронштейны факелов —
-    // было ~200 вызовов отрисовки, станет один (замер: insttest.html)
-    const staticG = new THREE.Group();
+    // ── АРЕНА ──
+    // Неподвижная часть (пол, стены, лава) фиксирована. Переменная часть
+    // (пилоны, факелы, печати, пикапы, старт) описана ArenaDef: игра строит
+    // её из данных, редактор те же данные редактирует и пересобирает.
+    const loadArena = (): ArenaDef => {
+      try {
+        if (localStorage.getItem('fw_arena_use') === 'custom') {
+          const v = validateArena(JSON.parse(localStorage.getItem('fw_arena') ?? ''));
+          if (v) return v;
+        }
+      } catch { /* битый JSON — играем базовую */ }
+      return structuredClone(DEFAULT_ARENA);
+    };
+    let A: ArenaDef = loadArena();
+
+    // неподвижное: пол + стены одним мешем, лава отдельно (светится)
+    const fixedG = new THREE.Group();
     const TS = 4;
     for (let ix = -ARENA / TS; ix < ARENA / TS; ix++) {
       for (let iz = -ARENA / TS; iz < ARENA / TS; iz++) {
         const t = box(TS - 0.06, 0.3, TS - 0.06, (ix + iz) % 2 ? C_FLOOR_A : C_FLOOR_B);
         t.position.set(ix * TS + TS / 2, -0.15, iz * TS + TS / 2);
-        staticG.add(t);
+        fixedG.add(t);
       }
     }
-    // лава за стенами (виден край мира) — светится, в статику не сливается
+    for (const [wx, wz, ww, wd] of [
+      [0, -ARENA, ARENA * 2 + 2, 1], [0, ARENA, ARENA * 2 + 2, 1],
+      [-ARENA, 0, 1, ARENA * 2 + 2], [ARENA, 0, 1, ARENA * 2 + 2],
+    ] as const) {
+      const w = box(ww, WALL_H, wd, C_WALL);
+      w.position.set(wx, WALL_H / 2, wz);
+      fixedG.add(w);
+      const trim = box(ww + 0.1, 0.5, wd + 0.1, C_WALL_TRIM);
+      trim.position.set(wx, 1.1, wz);
+      fixedG.add(trim);
+      const top = box(ww + 0.3, 0.6, wd + 0.3, C_WALL_TRIM);
+      top.position.set(wx, WALL_H, wz);
+      fixedG.add(top);
+    }
+    ctx.scene.add(bakeStatic(fixedG));
     for (const [lx, lz, lw, ld] of [
       [0, -ARENA - 9, ARENA * 2 + 26, 18], [0, ARENA + 9, ARENA * 2 + 26, 18],
       [-ARENA - 9, 0, 18, ARENA * 2 + 2], [ARENA + 9, 0, 18, ARENA * 2 + 2],
@@ -170,91 +197,88 @@ export const doom: MiniGame3D = {
       lava.position.set(lx, -0.9, lz);
       ctx.scene.add(lava);
     }
-    // стены с отбойником
-    for (const [wx, wz, ww, wd] of [
-      [0, -ARENA, ARENA * 2 + 2, 1], [0, ARENA, ARENA * 2 + 2, 1],
-      [-ARENA, 0, 1, ARENA * 2 + 2], [ARENA, 0, 1, ARENA * 2 + 2],
-    ] as const) {
-      const w = box(ww, WALL_H, wd, C_WALL);
-      w.position.set(wx, WALL_H / 2, wz);
-      staticG.add(w);
-      const trim = box(ww + 0.1, 0.5, wd + 0.1, C_WALL_TRIM);
-      trim.position.set(wx, 1.1, wz);
-      staticG.add(trim);
-      const top = box(ww + 0.3, 0.6, wd + 0.3, C_WALL_TRIM);
-      top.position.set(wx, WALL_H, wz);
-      staticG.add(top);
-    }
-    // пилоны-укрытия
-    interface Pillar { x: number; z: number; r: number }
-    const pillars: Pillar[] = [
-      { x: -11, z: -11, r: 1.6 }, { x: 11, z: -11, r: 1.6 },
-      { x: -11, z: 11, r: 1.6 }, { x: 11, z: 11, r: 1.6 },
-      { x: 0, z: 0, r: 2.2 },
-    ];
-    for (const p of pillars) {
-      const col = box(p.r * 2, 5, p.r * 2, C_PILLAR);
-      col.position.set(p.x, 2.5, p.z);
-      staticG.add(col);
-      const cap = box(p.r * 2 + 0.5, 0.5, p.r * 2 + 0.5, C_WALL_TRIM);
-      cap.position.set(p.x, 5.2, p.z);
-      staticG.add(cap);
-      const base = box(p.r * 2 + 0.6, 0.4, p.r * 2 + 0.6, C_WALL_TRIM);
-      base.position.set(p.x, 0.2, p.z);
-      staticG.add(base);
-      // «череп» на центральном пилоне — узнаваемая деталь.
-      // Модель общая с меню и витриной: одна правка — везде одинаково.
-      if (p.r > 2) {
-        const skull = bakeStatic(buildProp('skull'));   // ~25 мешей → 1 + угли
-        skull.scale.setScalar(1.25);
-        skull.position.set(0, 2.5, p.z - p.r - 0.15);
-        ctx.scene.add(skull);
-      }
-    }
-    // факелы по стенам (мерцающий свет)
-    interface Torch { light: THREE.PointLight; flame: THREE.Mesh; ph: number }
-    const torches: Torch[] = [];
-    const TP: [number, number][] = [
-      [-ARENA + 1, -14], [-ARENA + 1, 0], [-ARENA + 1, 14],
-      [ARENA - 1, -14], [ARENA - 1, 0], [ARENA - 1, 14],
-      [-14, -ARENA + 1], [14, -ARENA + 1], [-14, ARENA - 1], [14, ARENA - 1],
-    ];
-    for (const [tx, tz] of TP) {
-      const bracket = box(0.3, 0.9, 0.3, 0x2a2220);
-      bracket.position.set(tx, 3.0, tz);
-      staticG.add(bracket);
-      const flame = new THREE.Mesh(
-        new THREE.BoxGeometry(0.45, 0.7, 0.45),
-        new THREE.MeshStandardMaterial({ color: 0xffa040, emissive: 0xff7a20, emissiveIntensity: 1.6, roughness: 1 }),
-      );
-      flame.position.set(tx, 3.7, tz);
-      ctx.scene.add(flame);
-      const light = new THREE.PointLight(0xff8a3a, 1.5, 18, 1.6);
-      light.position.set(tx, 3.9, tz);
-      ctx.scene.add(light);
-      torches.push({ light, flame, ph: rng() * 6.28 });
-    }
-    ctx.scene.add(bakeStatic(staticG));   // вся неподвижная арена — один вызов отрисовки
 
-    // порталы спавна
-    const SPAWNS: [number, number][] = [
-      [0, -ARENA + 4], [0, ARENA - 4], [-ARENA + 4, 0], [ARENA - 4, 0],
-      [-17, -17], [17, -17], [-17, 17], [17, 17],
-    ];
-    // ПЕНТАГРАММЫ вместо синих площадок: рунная печать + красное свечение
-    const portals: Pentagram[] = [];
-    const portalLights: THREE.PointLight[] = [];
-    for (const [spx, spz] of SPAWNS) {
-      const pent = createPentagram(1.75);
-      pent.grp.position.set(spx, 0, spz);
-      pent.grp.rotation.y = rng() * Math.PI * 2;
-      ctx.scene.add(pent.grp);
-      portals.push(pent);
-      const pl = new THREE.PointLight(0xff2a10, 0.6, 7, 1.8);
-      pl.position.set(spx, 0.5, spz);
-      ctx.scene.add(pl);
-      portalLights.push(pl);
-    }
+    // переменное: заполняется buildArenaLive() из ArenaDef
+    interface Pillar { x: number; z: number; r: number }
+    interface Torch { light: THREE.PointLight; flame: THREE.Mesh; ph: number }
+    let pillars: Pillar[] = [];
+    let torches: Torch[] = [];
+    let portals: Pentagram[] = [];
+    let portalLights: THREE.PointLight[] = [];
+    let SPAWNS: [number, number][] = [];
+    let arenaGrp: THREE.Group | null = null;    // запечённые пилоны и стойки факелов
+    let arenaBits: THREE.Object3D[] = [];       // пламя, света, печати, черепа
+
+    const buildArenaLive = (def: ArenaDef) => {
+      const varG = new THREE.Group();
+      pillars = def.pillars.map((p) => ({ ...p }));
+      for (const p of pillars) {
+        const col = box(p.r * 2, 5, p.r * 2, C_PILLAR);
+        col.position.set(p.x, 2.5, p.z);
+        varG.add(col);
+        const cap = box(p.r * 2 + 0.5, 0.5, p.r * 2 + 0.5, C_WALL_TRIM);
+        cap.position.set(p.x, 5.2, p.z);
+        varG.add(cap);
+        const base = box(p.r * 2 + 0.6, 0.4, p.r * 2 + 0.6, C_WALL_TRIM);
+        base.position.set(p.x, 0.2, p.z);
+        varG.add(base);
+        // череп — узнаваемая деталь больших пилонов (модель общая с меню)
+        if (p.r > 2) {
+          const skull = bakeStatic(buildProp('skull'));
+          skull.scale.setScalar(1.25);
+          skull.position.set(p.x, 2.5, p.z - p.r - 0.15);
+          ctx.scene.add(skull);
+          arenaBits.push(skull);
+        }
+      }
+      torches = [];
+      for (const t of def.torches) {
+        // стойка до кронштейна: факел может стоять и посреди арены
+        const pole = box(0.16, 2.6, 0.16, 0x241c18);
+        pole.position.set(t.x, 1.3, t.z);
+        varG.add(pole);
+        const bracket = box(0.3, 0.9, 0.3, 0x2a2220);
+        bracket.position.set(t.x, 3.0, t.z);
+        varG.add(bracket);
+        const flame = new THREE.Mesh(
+          new THREE.BoxGeometry(0.45, 0.7, 0.45),
+          new THREE.MeshStandardMaterial({ color: 0xffa040, emissive: 0xff7a20, emissiveIntensity: 1.6, roughness: 1 }),
+        );
+        flame.position.set(t.x, 3.7, t.z);
+        ctx.scene.add(flame);
+        arenaBits.push(flame);
+        const light = new THREE.PointLight(0xff8a3a, 1.5, 18, 1.6);
+        light.position.set(t.x, 3.9, t.z);
+        ctx.scene.add(light);
+        arenaBits.push(light);
+        torches.push({ light, flame, ph: rng() * 6.28 });
+      }
+      SPAWNS = def.seals.map((sl) => [sl.x, sl.z] as [number, number]);
+      portals = [];
+      portalLights = [];
+      for (const [spx, spz] of SPAWNS) {
+        const pent = createPentagram(1.75);
+        pent.grp.position.set(spx, 0, spz);
+        pent.grp.rotation.y = rng() * Math.PI * 2;
+        ctx.scene.add(pent.grp);
+        arenaBits.push(pent.grp);
+        portals.push(pent);
+        const pl = new THREE.PointLight(0xff2a10, 0.6, 7, 1.8);
+        pl.position.set(spx, 0.5, spz);
+        ctx.scene.add(pl);
+        arenaBits.push(pl);
+        portalLights.push(pl);
+      }
+      arenaGrp = bakeStatic(varG);
+      ctx.scene.add(arenaGrp);
+    };
+    const disposeArenaLive = () => {
+      if (arenaGrp) { ctx.scene.remove(arenaGrp); disposeTree(arenaGrp); arenaGrp = null; }
+      for (const o of arenaBits) { ctx.scene.remove(o); disposeTree(o); }
+      arenaBits = [];
+      pillars = []; torches = []; portals = []; portalLights = []; SPAWNS = [];
+    };
+    buildArenaLive(A);
 
     // ── ДИОРАМА ТИТУЛА ──
     // Живёт высоко над ареной: в титуле камера уезжает туда, и в кадре только
@@ -405,8 +429,8 @@ export const doom: MiniGame3D = {
         if (!mm.isMesh) return;
         mm.geometry?.dispose();
         const mt = mm.material as THREE.Material | THREE.Material[] | undefined;
-        if (Array.isArray(mt)) for (const x of mt) x.dispose();
-        else mt?.dispose();
+        if (Array.isArray(mt)) { for (const x of mt) { if (!x.userData.shared) x.dispose(); } }
+        else if (mt && !mt.userData.shared) mt.dispose();
       });
     };
     ctx.scene.add(muzzleLight);
@@ -432,7 +456,7 @@ export const doom: MiniGame3D = {
     buildGun(0);
 
     // ── состояние игрока ──
-    let px = 0, pz = 14, yaw = 0, pitch = 0;
+    let px = A.start.x, pz = A.start.z, yaw = 0, pitch = 0;
     let hp = 100, armor = 0;
     const ammo = { bul: 60, shl: 0, rkt: 0 };
     let fireCd = 0, bob = 0, kick = 0, flashT = 0, flashCol = 0;
@@ -442,7 +466,7 @@ export const doom: MiniGame3D = {
     let showPerf = qs.get('perf') === '1';
     // startWave() делает wave++, поэтому держим на единицу меньше
     let wave = startWaveAt - 1, money = 0, kills = 0, totalKills = 0;
-    type Phase = 'title' | 'wave' | 'clear' | 'dead';
+    type Phase = 'title' | 'wave' | 'clear' | 'dead' | 'edit';
     let phase: Phase = 'title';
     let phaseT = 0, time = 0;
     let waveBudget = 0, spawnCd = 0, alive = 0;
@@ -454,6 +478,17 @@ export const doom: MiniGame3D = {
     // выбор запоминается между забегами
     let diffIx = Math.max(0, DIFFS.findIndex((d) => d.key === localStorage.getItem('fw_diff')));
     let D = DIFFS[diffIx];
+    const titleMenu = (): { label: string; act: 'play' | 'diff' | 'arena' | 'edit' | 'exit'; hint?: string }[] => {
+      const hasCustom = !!localStorage.getItem('fw_arena');
+      const useCustom = localStorage.getItem('fw_arena_use') === 'custom';
+      const it: { label: string; act: 'play' | 'diff' | 'arena' | 'edit' | 'exit'; hint?: string }[] = [
+        { label: 'НОВА ГРА', act: 'play' },
+        { label: `СКЛАДНІСТЬ: ${D.name}`, act: 'diff', hint: D.hint },
+      ];
+      if (hasCustom) it.push({ label: `АРЕНА: ${useCustom ? 'СВОЯ' : 'БАЗОВА'}`, act: 'arena', hint: 'чья арена пойдёт в бой' });
+      it.push({ label: 'РЕДАКТОР АРЕНИ', act: 'edit' }, { label: 'ВИЙТИ', act: 'exit' });
+      return it;
+    };
     const setDiff = (ix: number) => {
       diffIx = (ix + DIFFS.length) % DIFFS.length;
       D = DIFFS[diffIx];
@@ -592,21 +627,21 @@ export const doom: MiniGame3D = {
       ctx.scene.add(grp);
       pickups.push({ grp, kind, x, z, taken: 0 });
     };
-    const resetPickups = () => {
+    const resetPickups = (def: ArenaDef = A, rktSwap = true) => {
       for (const p of pickups) ctx.scene.remove(p.grp);
       pickups.length = 0;
-      mkPickup('med', -18, -6); mkPickup('med', 18, 6);
-      mkPickup('arm', 0, -19); mkPickup('arm', 0, 19);
-      // С 16-й волны три обоймы из четырёх меняются на ракеты: пистолет к этому
-      // моменту мёртв, но одну оставляем — из «bul» кормится ещё и пулемёт.
-      const rkt = wave >= RKT_WAVE;
-      mkPickup(rkt ? 'rkt' : 'bul', -6, -18);
-      mkPickup(rkt ? 'rkt' : 'bul', 6, 18);
-      mkPickup(rkt ? 'rkt' : 'bul', -19, 12);
-      mkPickup('bul', 19, -3);
-      mkPickup('box', -21, -21); mkPickup('box', 21, 21);   // ящики для пулемёта
-      mkPickup('shl', 19, -12); mkPickup('shl', -12, 4);
-      mkPickup('shl', 4, -21); mkPickup('med', 12, -4);
+      // С 16-й волны обоймы становятся ракетами, но ПЕРВАЯ в списке остаётся:
+      // из «bul» кормится ещё и пулемёт (в базовой арене порядок задан так же)
+      const rkt = rktSwap && wave >= RKT_WAVE;
+      let keptBul = false;
+      for (const pk of def.pickups) {
+        let kind: Pickup['kind'] = pk.kind;
+        if (pk.kind === 'bul') {
+          if (rkt && keptBul) kind = 'rkt';
+          keptBul = true;
+        }
+        mkPickup(kind, pk.x, pk.z);
+      }
     };
     resetPickups();
 
@@ -619,6 +654,34 @@ export const doom: MiniGame3D = {
     const onKeyDown = (e: KeyboardEvent) => {
       keys.add(e.code);
       if (e.code === 'F3') { showPerf = !showPerf; e.preventDefault(); }
+      // ── редактор ──
+      if (phase === 'edit') {
+        const mD = /^Digit(\d)$/.exec(e.code);
+        if (mD) { eSlot = mD[1] === '0' ? 9 : Number(mD[1]) - 1; return; }
+        if (e.code === 'KeyX') { eClickR = true; return; }
+        if (e.code === 'KeyG') { testPlayFromEditor(); return; }
+        if (e.code === 'KeyQ') { exitEditorToTitle(); return; }
+        if (e.code === 'KeyE') {
+          try {
+            void navigator.clipboard?.writeText(JSON.stringify(eDef));
+            eSay('АРЕНА СКОПИРОВАНА В БУФЕР');
+          } catch { eSay('БУФЕР НЕДОСТУПЕН'); }
+          return;
+        }
+        if (e.code === 'KeyI') {
+          if (document.pointerLockElement) document.exitPointerLock?.();
+          const t = window.prompt('Вставь JSON арены:');
+          if (t) {
+            try {
+              const v = validateArena(JSON.parse(t));
+              if (v) { eDef = v; rebuildEditor(); eSay('АРЕНА ИМПОРТИРОВАНА'); }
+              else eSay('НЕ ПОХОЖЕ НА АРЕНУ (нужно ≥2 печатей)');
+            } catch { eSay('БИТЫЙ JSON'); }
+          }
+          return;
+        }
+        if (e.code === 'KeyN') { eDef = structuredClone(DEFAULT_ARENA); rebuildEditor(); eSay('БАЗОВАЯ АРЕНА ЗАГРУЖЕНА'); return; }
+      }
       // ── IDCLEV: по кодам клавиш, чтобы раскладка не мешала ──
       if (phase === 'title') {
         const mL = /^Key([A-Z])$/.exec(e.code);
@@ -645,12 +708,21 @@ export const doom: MiniGame3D = {
     };
     const onKeyUp = (e: KeyboardEvent) => keys.delete(e.code);
     const onMouseMove = (e: MouseEvent) => { if (locked) { mDX += e.movementX; mDY += e.movementY; } };
-    const onMouseDown = () => {
+    const onMouseDown = (e: MouseEvent) => {
       mouseDown = true;
+      if (phase === 'edit') {
+        if (e.button === 0) eClickL = true;
+        if (e.button === 2) eClickR = true;
+      }
       if (!mob && !locked && phase !== 'title' && phase !== 'dead') {
         const el = document.querySelector('.mg-overlay canvas') as HTMLCanvasElement | null;
         void el?.requestPointerLock?.();
       }
+    };
+    const onCtxMenu = (e: Event) => { if (phase === 'edit') e.preventDefault(); };
+    const onWheel = (e: WheelEvent) => {
+      if (phase !== 'edit') return;
+      eSlot = (eSlot + (e.deltaY > 0 ? 1 : E_SLOTS.length - 1)) % E_SLOTS.length;
     };
     const onMouseUp = () => { mouseDown = false; };
     const onLockChange = () => { locked = !!document.pointerLockElement; };
@@ -658,6 +730,8 @@ export const doom: MiniGame3D = {
     window.addEventListener('keyup', onKeyUp);
     window.addEventListener('mousemove', onMouseMove);
     window.addEventListener('mousedown', onMouseDown);
+    window.addEventListener('contextmenu', onCtxMenu);
+    window.addEventListener('wheel', onWheel);
     window.addEventListener('mouseup', onMouseUp);
     document.addEventListener('pointerlockchange', onLockChange);
     const cleanup = () => {
@@ -665,6 +739,8 @@ export const doom: MiniGame3D = {
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('mousedown', onMouseDown);
+      window.removeEventListener('contextmenu', onCtxMenu);
+      window.removeEventListener('wheel', onWheel);
       window.removeEventListener('mouseup', onMouseUp);
       document.removeEventListener('pointerlockchange', onLockChange);
       if (document.pointerLockElement) document.exitPointerLock?.();
@@ -821,7 +897,13 @@ export const doom: MiniGame3D = {
         // ствол не выдаётся в руки — за ним надо сходить, под огнём
         rktArmed = true;
         resetPickups();                                  // три обоймы из четырёх меняются на ракеты
-        if (!owned[3]) { mkPickup('launcher', 0, -14); sfx.play('teleport', { x: 0, z: -14 }); }
+        if (!owned[3]) {
+          // на своих аренах точка (0,-14) может быть застроена — ищем свободную
+          const spots: [number, number][] = [[0, -14], [0, 14], [14, 0], [-14, 0], [0, 0], [A.start.x, A.start.z - 4]];
+          const [lx, lz] = spots.find(([qx, qz]) => !inPillar(qx, qz, 1)) ?? [0, -14];
+          mkPickup('launcher', lx, lz);
+          sfx.play('teleport', { x: lx, z: lz });
+        }
       }
     };
     const pickKind = (): MK => {
@@ -855,10 +937,268 @@ export const doom: MiniGame3D = {
         if (r.li >= 0) rktLights[r.li].intensity = 0;
       }
       rockets.length = 0;
-      px = 0; pz = 14; yaw = 0; wave = startWaveAt - 1;
+      px = A.start.x; pz = A.start.z; yaw = 0; wave = startWaveAt - 1;
       resetPickups();
       music.play('main', { fade: 0.8 });
       startWave();
+    };
+
+    // ═══════════════ РЕДАКТОР АРЕНЫ (майнкрафт-стиль) ═══════════════
+    // Полёт от первого лица, хотбар на 10 слотов, прицел подсвечивает клетку:
+    // ЛКМ ставит, ПКМ/X убирает, 0-9 и колесо выбирают слот. Правки сразу
+    // пересобирают арену (bakeStatic дёшев) и автосохраняются в localStorage.
+    interface ESlot { name: string; r: number; h: number; kind: 'pillar' | 'torch' | 'seal' | 'start' | 'med' | 'arm' | 'bul' | 'shl' | 'box' }
+    const E_SLOTS: ESlot[] = [
+      { name: 'ПИЛОН', r: 1.6, h: 5, kind: 'pillar' },
+      { name: 'ПИЛОН+', r: 2.2, h: 5, kind: 'pillar' },
+      { name: 'ФАКЕЛ', r: 0.6, h: 3.9, kind: 'torch' },
+      { name: 'ПЕЧАТЬ', r: 2.0, h: 0.3, kind: 'seal' },
+      { name: 'АПТЕЧКА', r: 0.6, h: 0.9, kind: 'med' },
+      { name: 'БРОНЯ', r: 0.6, h: 0.9, kind: 'arm' },
+      { name: 'ПАТРОНЫ', r: 0.6, h: 0.9, kind: 'bul' },
+      { name: 'ДРОБЬ', r: 0.6, h: 0.9, kind: 'shl' },
+      { name: 'ЯЩИК', r: 0.6, h: 0.9, kind: 'box' },
+      { name: 'СТАРТ', r: 0.6, h: 1.9, kind: 'start' },
+    ];
+    let eDef: ArenaDef = structuredClone(A);
+    let eSlot = 0;
+    let eX = 0, eY = 9, eZ = 24, eYaw = 0, ePitch = -0.5;
+    let eMsg = '', eMsgT = 0;
+    let eClickL = false, eClickR = false;
+    interface EFound { type: 'pillar' | 'torch' | 'seal' | 'pickup'; ix: number; x: number; z: number; r: number; h: number }
+    let eAim: { x: number; z: number; ok: boolean } | null = null;
+    let eFound: EFound | null = null;
+
+    // привид размещения + рамка удаления + маркер старта
+    const ghost = new THREE.Mesh(
+      new THREE.BoxGeometry(1, 1, 1),
+      new THREE.MeshBasicMaterial({ color: 0x40ff70, transparent: true, opacity: 0.3, depthWrite: false }),
+    );
+    ghost.visible = false;
+    ctx.scene.add(ghost);
+    const wire = new THREE.Mesh(
+      new THREE.BoxGeometry(1, 1, 1),
+      new THREE.MeshBasicMaterial({ color: 0xff4030, wireframe: true }),
+    );
+    wire.visible = false;
+    ctx.scene.add(wire);
+    const startMarker = new THREE.Group();
+    {
+      const pole = box(0.14, 1.8, 0.14, 0x3aa050); pole.position.y = 0.9; startMarker.add(pole);
+      const flag = box(0.7, 0.4, 0.08, 0x50e080); flag.position.set(0.42, 1.5, 0); startMarker.add(flag);
+      const base = box(0.7, 0.12, 0.7, 0x2a7040); base.position.y = 0.06; startMarker.add(base);
+    }
+    startMarker.visible = false;
+    ctx.scene.add(startMarker);
+
+    const eSay = (m: string) => { eMsg = m; eMsgT = 2.6; };
+    const eSaveLocal = () => {
+      try { localStorage.setItem('fw_arena', JSON.stringify(eDef)); } catch { /* нет места */ }
+    };
+    const eCounts = () => ({
+      pillars: eDef.pillars.length, torches: eDef.torches.length,
+      seals: eDef.seals.length, pickups: eDef.pickups.length,
+    });
+
+    const rebuildEditor = () => {
+      disposeArenaLive();
+      buildArenaLive(eDef);
+      resetPickups(eDef, false);
+      startMarker.position.set(eDef.start.x, 0, eDef.start.z);
+      eSaveLocal();
+      ctx.compile();          // число источников света могло смениться
+    };
+
+    const clearCombat = () => {
+      for (const m of mons) { m.wail?.stop(0.1); ctx.scene.remove(m.grp); for (const mt of m.mats) mt.dispose(); }
+      mons.length = 0; pending.length = 0; alive = 0;
+      for (const b of balls) { ballMeshes[b.mi].visible = false; if (b.li >= 0) ballLights[b.li].intensity = 0; }
+      balls.length = 0;
+      for (const r of rockets) { rktMeshes[r.mi].visible = false; if (r.li >= 0) rktLights[r.li].intensity = 0; }
+      rockets.length = 0;
+      gibs.length = 0; gibMesh.count = 0;
+      puffs.length = 0; dust.commit(0);
+      launcherLight.intensity = 0;
+    };
+
+    const enterEditor = () => {
+      clearCombat();
+      phase = 'edit'; phaseT = 0;
+      eDef = structuredClone(A);
+      rebuildEditor();
+      eX = eDef.start.x; eY = 9; eZ = Math.min(24, eDef.start.z + 10);
+      eYaw = 0; ePitch = -0.55;
+      startMarker.visible = true;
+      eSay('РЕДАКТОР: ЛКМ — поставить, ПКМ — убрать, G — тест');
+    };
+    const exitEditorToTitle = () => {
+      ghost.visible = false; wire.visible = false; startMarker.visible = false;
+      A = loadArena();
+      disposeArenaLive();
+      buildArenaLive(A);
+      resetPickups();
+      px = A.start.x; pz = A.start.z;
+      ctx.compile();
+      phase = 'title'; phaseT = 0;
+      if (document.pointerLockElement) document.exitPointerLock?.();
+    };
+    const testPlayFromEditor = () => {
+      if (eDef.seals.length < 2) { eSay('МИНИМУМ ДВЕ ПЕЧАТИ СПАВНА'); return; }
+      try {
+        localStorage.setItem('fw_arena', JSON.stringify(eDef));
+        localStorage.setItem('fw_arena_use', 'custom');
+      } catch { /* приватный режим */ }
+      A = structuredClone(eDef);
+      ghost.visible = false; wire.visible = false; startMarker.visible = false;
+      restart();
+    };
+    const toggleArena = () => {
+      const cur = localStorage.getItem('fw_arena_use') === 'custom';
+      try { localStorage.setItem('fw_arena_use', cur ? 'default' : 'custom'); } catch { /* noop */ }
+      A = loadArena();
+      disposeArenaLive();
+      buildArenaLive(A);
+      resetPickups();
+      px = A.start.x; pz = A.start.z;
+      ctx.compile();
+    };
+
+    /** пересечение квадратных следов: занято ли место (x,z,r) чем-то из eDef */
+    const eBlocked = (x: number, z: number, r: number, skip?: EFound): boolean => {
+      const hit = (ox: number, oz: number, or_: number) => Math.max(Math.abs(x - ox), Math.abs(z - oz)) < r + or_;
+      for (let i = 0; i < eDef.pillars.length; i++) {
+        const p = eDef.pillars[i];
+        if (skip?.type === 'pillar' && skip.ix === i) continue;
+        if (hit(p.x, p.z, p.r)) return true;
+      }
+      for (let i = 0; i < eDef.torches.length; i++) {
+        if (skip?.type === 'torch' && skip.ix === i) continue;
+        if (hit(eDef.torches[i].x, eDef.torches[i].z, 0.6)) return true;
+      }
+      for (let i = 0; i < eDef.seals.length; i++) {
+        if (skip?.type === 'seal' && skip.ix === i) continue;
+        if (hit(eDef.seals[i].x, eDef.seals[i].z, 2.0)) return true;
+      }
+      for (let i = 0; i < eDef.pickups.length; i++) {
+        if (skip?.type === 'pickup' && skip.ix === i) continue;
+        if (hit(eDef.pickups[i].x, eDef.pickups[i].z, 0.6)) return true;
+      }
+      if (hit(eDef.start.x, eDef.start.z, 0.6)) return true;
+      return false;
+    };
+    /** что стоит в точке прицела (для удаления) — сначала мелкое, потом крупное */
+    const eFind = (x: number, z: number): EFound | null => {
+      const at = (ox: number, oz: number, or_: number) => Math.max(Math.abs(x - ox), Math.abs(z - oz)) <= or_ + 0.35;
+      for (let i = 0; i < eDef.pickups.length; i++) {
+        const p = eDef.pickups[i];
+        if (at(p.x, p.z, 0.6)) return { type: 'pickup', ix: i, x: p.x, z: p.z, r: 0.7, h: 1.0 };
+      }
+      for (let i = 0; i < eDef.torches.length; i++) {
+        const t = eDef.torches[i];
+        if (at(t.x, t.z, 0.6)) return { type: 'torch', ix: i, x: t.x, z: t.z, r: 0.5, h: 4.1 };
+      }
+      for (let i = 0; i < eDef.seals.length; i++) {
+        const sl = eDef.seals[i];
+        if (at(sl.x, sl.z, 2.0)) return { type: 'seal', ix: i, x: sl.x, z: sl.z, r: 2.0, h: 0.5 };
+      }
+      for (let i = 0; i < eDef.pillars.length; i++) {
+        const pl = eDef.pillars[i];
+        if (at(pl.x, pl.z, pl.r)) return { type: 'pillar', ix: i, x: pl.x, z: pl.z, r: pl.r + 0.3, h: 5.4 };
+      }
+      return null;
+    };
+
+    const updateEditor = (dt: number) => {
+      if (eMsgT > 0) eMsgT -= dt;
+      // ── полёт ──
+      const spd = (keys.has('KeyR') ? 26 : 14) * dt;
+      const fwd = (keys.has('KeyW') ? 1 : 0) - (keys.has('KeyS') ? 1 : 0);
+      const strafe = (keys.has('KeyD') ? 1 : 0) - (keys.has('KeyA') ? 1 : 0);
+      const sy = Math.sin(eYaw), cy = Math.cos(eYaw);
+      eX += (-sy * fwd + cy * strafe) * spd;
+      eZ += (-cy * fwd - sy * strafe) * spd;
+      eY += ((keys.has('Space') ? 1 : 0) - (keys.has('ShiftLeft') || keys.has('ShiftRight') ? 1 : 0)) * spd;
+      eX = Math.max(-38, Math.min(38, eX));
+      eZ = Math.max(-38, Math.min(38, eZ));
+      eY = Math.max(1.2, Math.min(36, eY));
+      // ── взгляд: мышь в захвате + стрелки для трекпада ──
+      const sens = 0.0022;
+      eYaw -= mDX * sens;
+      ePitch = Math.max(-1.35, Math.min(1.35, ePitch - mDY * sens * 0.8));
+      mDX = 0; mDY = 0;
+      const lookX = (keys.has('ArrowRight') ? 1 : 0) - (keys.has('ArrowLeft') ? 1 : 0);
+      const lookY = (keys.has('ArrowUp') ? 1 : 0) - (keys.has('ArrowDown') ? 1 : 0);
+      eYaw -= lookX * 2.1 * dt;
+      ePitch = Math.max(-1.35, Math.min(1.35, ePitch + lookY * 1.5 * dt));
+
+      // ── луч в пол ──
+      const fx = -Math.cos(ePitch) * Math.sin(eYaw);
+      const fy = Math.sin(ePitch);
+      const fz = -Math.cos(ePitch) * Math.cos(eYaw);
+      eAim = null; eFound = null;
+      if (fy < -0.04) {
+        const t = -eY / fy;
+        if (t < 90) {
+          const hx = eX + fx * t, hz = eZ + fz * t;
+          if (Math.abs(hx) <= 27 && Math.abs(hz) <= 27) {
+            const cx = Math.round(hx), cz = Math.round(hz);
+            eFound = eFind(hx, hz);
+            const sl = E_SLOTS[eSlot];
+            const lim = sl.kind === 'torch' ? 25 : sl.kind === 'pillar' ? Math.floor(25 - sl.r) : 24;
+            const inB = Math.abs(cx) <= lim && Math.abs(cz) <= lim;
+            eAim = { x: cx, z: cz, ok: inB && !eBlocked(cx, cz, sl.r) };
+          }
+        }
+      }
+
+      // ── привид и рамка ──
+      const sl = E_SLOTS[eSlot];
+      if (eFound) {
+        wire.visible = true;
+        wire.scale.set(eFound.r * 2, eFound.h, eFound.r * 2);
+        wire.position.set(eFound.x, eFound.h / 2, eFound.z);
+      } else wire.visible = false;
+      if (eAim && !eFound) {
+        ghost.visible = true;
+        ghost.scale.set(sl.r * 2, sl.h, sl.r * 2);
+        ghost.position.set(eAim.x, sl.h / 2, eAim.z);
+        (ghost.material as THREE.MeshBasicMaterial).color.setHex(eAim.ok ? 0x40ff70 : 0xff4030);
+      } else ghost.visible = false;
+
+      // ── действия ──
+      if (eClickL) {
+        eClickL = false;
+        if (eAim && !eFound && eAim.ok) {
+          const c = eCounts();
+          if (sl.kind === 'pillar') {
+            if (c.pillars >= ARENA_CAPS.pillars) eSay(`ПИЛОНОВ НЕ БОЛЬШЕ ${ARENA_CAPS.pillars}`);
+            else { eDef.pillars.push({ x: eAim.x, z: eAim.z, r: sl.r }); rebuildEditor(); }
+          } else if (sl.kind === 'torch') {
+            if (c.torches >= ARENA_CAPS.torches) eSay(`ФАКЕЛОВ НЕ БОЛЬШЕ ${ARENA_CAPS.torches}`);
+            else { eDef.torches.push({ x: eAim.x, z: eAim.z }); rebuildEditor(); }
+          } else if (sl.kind === 'seal') {
+            if (c.seals >= ARENA_CAPS.seals) eSay(`ПЕЧАТЕЙ НЕ БОЛЬШЕ ${ARENA_CAPS.seals}`);
+            else { eDef.seals.push({ x: eAim.x, z: eAim.z }); rebuildEditor(); }
+          } else if (sl.kind === 'start') {
+            eDef.start = { x: eAim.x, z: eAim.z };
+            startMarker.position.set(eAim.x, 0, eAim.z);
+            eSaveLocal();
+          } else {
+            if (c.pickups >= ARENA_CAPS.pickups) eSay(`ПРЕДМЕТОВ НЕ БОЛЬШЕ ${ARENA_CAPS.pickups}`);
+            else { eDef.pickups.push({ kind: sl.kind, x: eAim.x, z: eAim.z }); rebuildEditor(); }
+          }
+        } else if (eFound) eSay('ЗАНЯТО — СНАЧАЛА УБЕРИ (ПКМ)');
+      }
+      if (eClickR) {
+        eClickR = false;
+        if (eFound) {
+          if (eFound.type === 'pillar') eDef.pillars.splice(eFound.ix, 1);
+          else if (eFound.type === 'torch') eDef.torches.splice(eFound.ix, 1);
+          else if (eFound.type === 'seal') eDef.seals.splice(eFound.ix, 1);
+          else eDef.pickups.splice(eFound.ix, 1);
+          rebuildEditor();
+        }
+      }
     };
 
     // ── прогрев шейдеров: всё компилируется на титуле, а не посреди боя ──
@@ -1039,8 +1379,77 @@ export const doom: MiniGame3D = {
       });
     };
 
+    /** HUD редактора: заголовок, счётчики, хотбар, подсказки */
+    const drawEditorHud = () => {
+      const W = ctx.width, H = ctx.height;
+      // прицел
+      g.strokeStyle = 'rgba(232,200,64,0.85)'; g.lineWidth = 2;
+      g.beginPath();
+      g.moveTo(W / 2 - 9, H / 2); g.lineTo(W / 2 - 3, H / 2);
+      g.moveTo(W / 2 + 3, H / 2); g.lineTo(W / 2 + 9, H / 2);
+      g.moveTo(W / 2, H / 2 - 9); g.lineTo(W / 2, H / 2 - 3);
+      g.moveTo(W / 2, H / 2 + 3); g.lineTo(W / 2, H / 2 + 9);
+      g.stroke();
+
+      // шапка
+      g.textAlign = 'left';
+      fitFont(g, 'РЕДАКТОР АРЕНЫ', W * 0.4, 22, FAM);
+      g.fillStyle = '#e8c840';
+      g.fillText('РЕДАКТОР АРЕНЫ', 14, 30);
+      const c = eCounts();
+      g.font = '12px ui-monospace, monospace';
+      g.fillStyle = '#a07a6a';
+      g.fillText(
+        `пилоны ${c.pillars}/${ARENA_CAPS.pillars} · факелы ${c.torches}/${ARENA_CAPS.torches}` +
+        ` · печати ${c.seals}/${ARENA_CAPS.seals} · предметы ${c.pickups}/${ARENA_CAPS.pickups}`,
+        14, 48,
+      );
+      if (c.seals < 2) {
+        g.fillStyle = '#ff5a3a';
+        g.fillText('нужно минимум 2 печати спавна, иначе тест не запустится', 14, 64);
+      }
+
+      // хотбар
+      const n = E_SLOTS.length;
+      const sw = Math.min(72, (W - 40) / n), sh = 44, gap = 4;
+      const x0 = W / 2 - (sw * n + gap * (n - 1)) / 2, y0 = H - sh - 14;
+      for (let i = 0; i < n; i++) {
+        const x = x0 + i * (sw + gap);
+        const sel = i === eSlot;
+        g.fillStyle = sel ? 'rgba(232,200,64,0.2)' : 'rgba(20,10,8,0.72)';
+        g.fillRect(x, y0, sw, sh);
+        g.strokeStyle = sel ? '#e8c840' : '#4a2c26';
+        g.lineWidth = sel ? 3 : 2;
+        g.strokeRect(x + 1, y0 + 1, sw - 2, sh - 2);
+        g.textAlign = 'left';
+        g.fillStyle = sel ? '#e8c840' : '#8a6a5a';
+        g.font = '10px ui-monospace, monospace';
+        g.fillText(`${(i + 1) % 10}`, x + 4, y0 + 12);
+        g.textAlign = 'center';
+        fitFont(g, E_SLOTS[i].name, sw - 6, 11, FAM);
+        g.fillText(E_SLOTS[i].name, x + sw / 2, y0 + sh - 8);
+      }
+
+      // подсказки
+      g.textAlign = 'center';
+      g.font = '11px ui-monospace, monospace';
+      g.fillStyle = '#7a5a50';
+      g.fillText(
+        'ЛКМ поставить · ПКМ/X убрать · 0-9/колесо слот · WASD+SPACE/SHIFT полёт (R быстрее)' +
+        ' · G тест · Q титул · N базовая · E/I экспорт/импорт',
+        W / 2, y0 - 10,
+      );
+      if (eMsgT > 0) {
+        fitFont(g, eMsg, W * 0.8, 18, FAM);
+        g.fillStyle = '#ff8a30';
+        g.fillText(eMsg, W / 2, H * 0.3);
+      }
+      g.textAlign = 'left';
+    };
+
     const drawHud = () => {
       const W = ctx.width, H = ctx.height;
+      if (phase === 'edit') { drawEditorHud(); return; }
 
       // ── ТИТУЛ (красно-чёрный, курсор-череп) ──
       if (phase === 'title') {
@@ -1102,24 +1511,26 @@ export const doom: MiniGame3D = {
         fitFont(g, 'ТРИМАЙ ПОРТ · ОПЛАТА ЗА ВІДБИТУ ХВИЛЮ', W * 0.8, 15, FAM);
         g.fillStyle = '#c88a5a';
         g.fillText('ТРИМАЙ ПОРТ · ОПЛАТА ЗА ВІДБИТУ ХВИЛЮ', W / 2, H * 0.24 + 34);
-        const items = ['НОВА ГРА', `СКЛАДНІСТЬ: ${D.name}`, 'ВИЙТИ'];
-        for (let i = 0; i < items.length; i++) {
-          const yy = H * 0.5 + i * 58;
+        const menu = titleMenu();
+        const step = menu.length >= 5 ? 48 : 58;
+        for (let i = 0; i < menu.length; i++) {
+          const yy = H * 0.5 + i * step;
           const on = i === titleSel;
-          fitFont(g, items[i], W * 0.5, i === 1 ? 24 : 30, FAM);
-          g.fillStyle = i === 1 ? (on ? D.col : '#7a5a4a') : on ? '#e8c840' : '#8a5a4a';
-          g.fillText(items[i], W / 2, yy);
-          if (i === 1) {                       // подсказка под строкой сложности
+          const small = menu[i].act === 'diff' || menu[i].act === 'arena';
+          fitFont(g, menu[i].label, W * 0.5, small ? 24 : 30, FAM);
+          g.fillStyle = small ? (on ? D.col : '#7a5a4a') : on ? '#e8c840' : '#8a5a4a';
+          g.fillText(menu[i].label, W / 2, yy);
+          if (on && menu[i].hint) {
             g.save();
-            fitFont(g, `← → ${D.hint}`, W * 0.6, 12, FAM);
+            fitFont(g, `← → ${menu[i].hint}`, W * 0.6, 12, FAM);
             g.fillStyle = '#7a5a50';
-            g.fillText(`← → ${D.hint}`, W / 2, yy + 17);
+            g.fillText(`← → ${menu[i].hint}`, W / 2, yy + 17);
             g.restore();
           }
           if (on) {
             // курсор-череп слева от края текста: пункты разной длины,
             // фиксированный отступ налезал на длинную строку сложности
-            const tw = g.measureText(items[i]).width;
+            const tw = g.measureText(menu[i].label).width;
             const sx = W / 2 - tw / 2 - 34, sy = yy - 10;
             g.fillStyle = '#d8d2c0'; g.fillRect(sx - 12, sy - 12, 24, 20);
             g.fillStyle = '#140808'; g.fillRect(sx - 8, sy - 6, 6, 7); g.fillRect(sx + 2, sy - 6, 6, 7);
@@ -1389,6 +1800,8 @@ export const doom: MiniGame3D = {
     let prevPD = false, prevEnter = false, prevUp = false, prevDown = false, prevLR = 0;
     let menuMusicOn = false; // chill в титуле — только после жеста (autoplay-политика)
 
+    if (qs.get('edit') === '1') enterEditor();   // отладка: сразу в редактор
+
     ctx.onFrame((dt) => {
       time += dt; phaseT += dt;
       if (flashT > 0) flashT -= dt;
@@ -1462,23 +1875,36 @@ export const doom: MiniGame3D = {
           menuMusicOn = true;
           music.play('chill', { fade: 1.8 });
         }
-        if (upEdge || downEdge) { titleSel = (titleSel + (downEdge ? 1 : 2)) % 3; sfx.play('menuMove'); }
-        if (titleSel === 1 && lrEdge !== 0) { setDiff(diffIx + (lrEdge > 0 ? 1 : -1)); sfx.play('menuMove'); }
+        const menu = titleMenu();
+        if (titleSel >= menu.length) titleSel = 0;
+        if (upEdge || downEdge) {
+          titleSel = (titleSel + (downEdge ? 1 : menu.length - 1)) % menu.length;
+          sfx.play('menuMove');
+        }
+        const selAct = menu[titleSel].act;
+        if (lrEdge !== 0) {
+          if (selAct === 'diff') { setDiff(diffIx + (lrEdge > 0 ? 1 : -1)); sfx.play('menuMove'); }
+          else if (selAct === 'arena') { toggleArena(); sfx.play('menuMove'); }
+        }
         const startNow = enterEdge || keys.has('Space') || (mob && pdEdge);
         if (startNow) {
           if (mob && pdEdge) {
-            // тап по пункту: берём ближайшую строку из трёх
+            // тап по пункту: ближайшая строка меню
+            const step = menu.length >= 5 ? 48 : 58;
             const ty = ctx.input.pointer.y;
             let best = 0, bestD = 1e9;
-            for (let i = 0; i < 3; i++) {
-              const d = Math.abs(ty - (ctx.height * 0.5 + i * 58));
+            for (let i = 0; i < menu.length; i++) {
+              const d = Math.abs(ty - (ctx.height * 0.5 + i * step));
               if (d < bestD) { bestD = d; best = i; }
             }
             titleSel = best;
           }
           sfx.play('menuSelect');
-          if (titleSel === 1) { setDiff(diffIx + 1); }        // строка сложности — перебор
-          else if (titleSel === 2) { cleanup(); ctx.finish({ success: false, score: 0 }); return; }
+          const act = menu[titleSel].act;
+          if (act === 'diff') setDiff(diffIx + 1);
+          else if (act === 'arena') toggleArena();
+          else if (act === 'edit') enterEditor();
+          else if (act === 'exit') { cleanup(); ctx.finish({ success: false, score: 0 }); return; }
           else {
             music.play('main', { fade: 1.4 });   // из chill в бой с наложением
             startWave();
@@ -1498,6 +1924,32 @@ export const doom: MiniGame3D = {
         updateMenuRig(dt, time);
         cam.position.set(0, MENU_Y + 1.5, MENU_DIST);
         cam.rotation.set(0, 0, 0, 'YXZ');
+        drawHud();
+        touch?.endFrame();
+        return;
+      }
+
+      // ── РЕДАКТОР ──
+      if (phase === 'edit') {
+        updateEditor(dt);
+        menuRig.visible = false;
+        gunGrp.visible = false;
+        cam.position.set(eX, eY, eZ);
+        cam.rotation.set(ePitch, eYaw, 0, 'YXZ');
+        // печати и факелы живут и здесь — видно, как будет в бою
+        for (const p of portals) p.update(dt, time);
+        for (let i = 0; i < portalLights.length; i++) {
+          portalLights[i].intensity = 0.45 + 0.35 * Math.sin(time * 2.2);
+        }
+        for (const t of torches) {
+          const f = 0.75 + 0.35 * Math.abs(Math.sin(time * 9 + t.ph)) + 0.15 * Math.sin(time * 23 + t.ph);
+          t.light.intensity = 1.2 * f;
+          t.flame.scale.set(0.9 + f * 0.2, f, 0.9 + f * 0.2);
+        }
+        for (const p of pickups) {
+          p.grp.rotation.y += dt * 1.6;
+          p.grp.position.y = 0.1 + Math.sin(time * 2.5 + p.x) * 0.12;
+        }
         drawHud();
         touch?.endFrame();
         return;
