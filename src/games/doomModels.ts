@@ -64,6 +64,8 @@ export interface ArenaPillar {
   /** полуширина по Z (по умолчанию = r; у стен другая) */ rz?: number;
   /** block — пилон, obelisk — высокий гранёный, wall — перепона, pyramid — ступенчатая */
   kind?: ArenaPillarKind;
+  /** поворот в градусах, шаг 45 (0/45/90/135); коллизия — по описанному прямоугольнику */
+  rot?: number;
 }
 export interface ArenaDef {
   /** полуразмер арены в метрах (стены на ±size), чётный, 16..40 */
@@ -81,7 +83,7 @@ export interface ArenaDef {
 }
 
 /** потолки редактора: света на арене конечное число, драйвер скажет спасибо */
-export const ARENA_CAPS = { pillars: 16, torches: 12, seals: 10, pickups: 24 } as const;
+export const ARENA_CAPS = { pillars: 48, torches: 14, seals: 10, pickups: 40 } as const;
 
 export const DEFAULT_ARENA: ArenaDef = {
   size: 26,
@@ -218,7 +220,7 @@ export function validateArena(raw: unknown): ArenaDef | null {
   const out: ArenaDef = { size, sky, ground, pillars: [], torches: [], seals: [], pickups: [], start: { x: 0, z: 14 } };
   const B = size - 2;   // общая граница объектов
 
-  const kinds0: ArenaPillarKind[] = ['block', 'obelisk', 'wall', 'pyramid'];
+  const kinds0: ArenaPillarKind[] = ['block', 'obelisk', 'wall', 'pyramid', 'rubble', 'column', 'steps', 'rock', 'statue', 'dais'];
   for (const it of arr(o.pillars).slice(0, ARENA_CAPS.pillars)) {
     const e = it as Record<string, unknown>;
     const kind: ArenaPillarKind = kinds0.includes(e.kind as ArenaPillarKind) ? (e.kind as ArenaPillarKind) : 'block';
@@ -227,8 +229,15 @@ export function validateArena(raw: unknown): ArenaDef | null {
     const r = dim(e.r);
     const rz = e.rz === undefined ? r : dim(e.rz);
     const x = num(e.x, B), z = num(e.z, B);
+    const rot = typeof e.rot === 'number' && Number.isFinite(e.rot)
+      ? ((Math.round(e.rot / 45) * 45) % 180 + 180) % 180
+      : 0;
     if (x !== null && z !== null && r !== null && rz !== null) {
-      out.pillars.push(kind === 'block' && r === rz ? { x, z, r } : { x, z, r, rz, kind });
+      out.pillars.push(
+        kind === 'block' && r === rz && !rot
+          ? { x, z, r }
+          : { x, z, r, rz, kind, ...(rot ? { rot } : {}) },
+      );
     }
   }
   for (const it of arr(o.torches).slice(0, ARENA_CAPS.torches)) {
@@ -559,23 +568,29 @@ BAKED_MAT.userData.shared = true;   // общий на все запечённы
 export function bakeStatic(src: THREE.Group): THREE.Group {
   const out = new THREE.Group();
   const geos: THREE.BufferGeometry[] = [];
+  const kept: THREE.Mesh[] = [];
   const tmp = new THREE.Color();
-  for (const o of [...src.children]) {
+  src.updateMatrixWorld(true);       // src вне сцены: matrixWorld = локальная цепочка
+  src.traverse((o) => {
     const m = o as THREE.Mesh;
+    if (!m.isMesh) return;
     const mat = m.material as THREE.MeshLambertMaterial | undefined;
-    const plain = !!(m.isMesh && mat && (mat as { isMeshLambertMaterial?: boolean }).isMeshLambertMaterial
+    const plain = !!(mat && (mat as { isMeshLambertMaterial?: boolean }).isMeshLambertMaterial
       && !mat.transparent && mat.emissive.getHex() === 0);
-    if (!plain) { out.add(o); continue; }              // переезжает как есть
-    m.updateMatrix();
-    const g = (m.geometry as THREE.BufferGeometry).clone().applyMatrix4(m.matrix);
-    tmp.copy(mat.color);
+    if (!plain) { kept.push(m); return; }
+    const g = (m.geometry as THREE.BufferGeometry).clone().applyMatrix4(m.matrixWorld);
+    tmp.copy(mat!.color);
     const n = g.attributes.position.count;
     const col = new Float32Array(n * 3);
     for (let i = 0; i < n; i++) { col[i * 3] = tmp.r; col[i * 3 + 1] = tmp.g; col[i * 3 + 2] = tmp.b; }
     g.setAttribute('color', new THREE.BufferAttribute(col, 3));
     geos.push(g);
     (m.geometry as THREE.BufferGeometry).dispose();
-    mat.dispose();
+    mat!.dispose();
+  });
+  for (const m of kept) {            // светящееся переезжает с мировой позой
+    m.matrixWorld.decompose(m.position, m.quaternion, m.scale);
+    out.add(m);
   }
   if (geos.length) {
     const merged = mergeGeometries(geos, false)!;

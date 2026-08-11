@@ -288,9 +288,16 @@ export const doom: MiniGame3D = {
     let ARENA = A.size;   // полуразмер: обновляется при пересборке арены
 
     // всё строится в buildArenaLive: размер арены теперь часть ArenaDef
-    interface Pillar { x: number; z: number; r: number; rz: number; kind: 'block' | 'obelisk' | 'wall' | 'pyramid' | 'rubble' | 'column' | 'steps' | 'rock' | 'statue' }
+    interface Pillar {
+      x: number; z: number; r: number; rz: number;
+      /** поворот в градусах (0/45/90/135) — только визуал */
+      rot: number;
+      /** полуширины ОПИСАННОГО прямоугольника — для коллизий и линии огня */
+      ex: number; ez: number;
+      kind: 'block' | 'obelisk' | 'wall' | 'pyramid' | 'rubble' | 'column' | 'steps' | 'rock' | 'statue';
+    }
     /** проходимая платформа: на неё можно зайти, край — пандус-«ступеньки» */
-    interface Dais { x: number; z: number; rx: number; rz: number; h: number }
+    interface Dais { x: number; z: number; rx: number; rz: number; rot: number; ex: number; ez: number; h: number }
     interface Torch { light: THREE.PointLight; flame: THREE.Mesh; ph: number }
     let pillars: Pillar[] = [];
     let daises: Dais[] = [];
@@ -305,8 +312,8 @@ export const doom: MiniGame3D = {
     const groundY = (x: number, z: number): number => {
       let y = 0;
       for (const d of daises) {
-        const inX = d.rx - Math.abs(x - d.x);
-        const inZ = d.rz - Math.abs(z - d.z);
+        const inX = d.ex - Math.abs(x - d.x);
+        const inZ = d.ez - Math.abs(z - d.z);
         if (inX <= 0 || inZ <= 0) continue;
         const k = Math.min(1, Math.min(inX, inZ) / 1.1);
         y = Math.max(y, d.h * k);
@@ -372,76 +379,94 @@ export const doom: MiniGame3D = {
         ctx.scene.add(lava);
         arenaBits.push(lava);
       }
+      // описанный прямоугольник повёрнутого следа: 0/90 — точный, 45/135 — рамка
+      const ext = (rx: number, rz: number, rot: number): [number, number] =>
+        rot === 0 ? [rx, rz] : rot === 90 ? [rz, rx] : [(rx + rz) * 0.7071, (rx + rz) * 0.7071];
       pillars = def.pillars
         .filter((p) => p.kind !== 'dais')
-        .map((p) => ({ x: p.x, z: p.z, r: p.r, rz: p.rz ?? p.r, kind: (p.kind ?? 'block') as Pillar['kind'] }));
+        .map((p) => {
+          const rz = p.rz ?? p.r, rot = p.rot ?? 0;
+          const [ex, ez] = ext(p.r, rz, rot);
+          return { x: p.x, z: p.z, r: p.r, rz, rot, ex, ez, kind: (p.kind ?? 'block') as Pillar['kind'] };
+        });
       daises = def.pillars
         .filter((p) => p.kind === 'dais')
-        .map((p) => ({ x: p.x, z: p.z, rx: p.r, rz: p.rz ?? p.r, h: 0.9 }));
+        .map((p) => {
+          const rz = p.rz ?? p.r, rot = p.rot ?? 0;
+          const [ex, ez] = ext(p.r, rz, rot);
+          return { x: p.x, z: p.z, rx: p.r, rz, rot, ex, ez, h: 0.9 };
+        });
       // платформы: ржавый верх и две ступеньки-юбки по периметру
       for (const d of daises) {
-        const s1 = box(d.rx * 2 + 1.0, 0.3, d.rz * 2 + 1.0, 0x6a3416); s1.position.set(d.x, 0.15, d.z); varG.add(s1);
-        const s2 = box(d.rx * 2 + 0.5, 0.3, d.rz * 2 + 0.5, 0x84421c); s2.position.set(d.x, 0.45, d.z); varG.add(s2);
-        const top = box(d.rx * 2, 0.34, d.rz * 2, 0xa04c1e); top.position.set(d.x, 0.73, d.z); varG.add(top);
-        const trim = box(d.rx * 2 - 1.2, 0.06, d.rz * 2 - 1.2, 0x7a3a18); trim.position.set(d.x, 0.93, d.z); varG.add(trim);
+        const sub = new THREE.Group();
+        sub.position.set(d.x, 0, d.z);
+        sub.rotation.y = (d.rot * Math.PI) / 180;
+        const put = (w: number, h: number, dd: number, c: number, oy: number) => {
+          const m = box(w, h, dd, c); m.position.y = oy; sub.add(m);
+        };
+        put(d.rx * 2 + 1.0, 0.3, d.rz * 2 + 1.0, 0x6a3416, 0.15);
+        put(d.rx * 2 + 0.5, 0.3, d.rz * 2 + 0.5, 0x84421c, 0.45);
+        put(d.rx * 2, 0.34, d.rz * 2, 0xa04c1e, 0.73);
+        put(d.rx * 2 - 1.2, 0.06, d.rz * 2 - 1.2, 0x7a3a18, 0.93);
+        varG.add(sub);
       }
       for (const p of pillars) {
+        // структура собирается в подгруппе со смещениями от центра — так
+        // поворот на 45° достаётся бесплатно, а bakeStatic запечёт мировую позу
+        const sub = new THREE.Group();
+        sub.position.set(p.x, 0, p.z);
+        sub.rotation.y = (p.rot * Math.PI) / 180;
+        varG.add(sub);
+        const put = (w: number, h: number, dd: number, c: number, ox: number, oy: number, oz: number, ry = 0) => {
+          const m = box(w, h, dd, c);
+          m.position.set(ox, oy, oz);
+          m.rotation.y = ry;
+          sub.add(m);
+          return m;
+        };
         if (p.kind === 'obelisk') {
-          // гранёный обелиск: ступени сужаются, наверху пирамидка
-          const b1 = box(p.r * 2 + 0.6, 0.8, p.rz * 2 + 0.6, C_WALL_TRIM); b1.position.set(p.x, 0.4, p.z); varG.add(b1);
-          const b2 = box(p.r * 2, 3.4, p.rz * 2, C_PILLAR); b2.position.set(p.x, 2.5, p.z); varG.add(b2);
-          const b3 = box(p.r * 1.5, 3.4, p.rz * 1.5, C_PILLAR); b3.position.set(p.x, 5.9, p.z); varG.add(b3);
-          const b4 = box(p.r * 1.05, 3.0, p.rz * 1.05, C_PILLAR); b4.position.set(p.x, 9.1, p.z); varG.add(b4);
-          const tip = box(p.r * 0.7, 0.9, p.rz * 0.7, C_LAVA); tip.position.set(p.x, 11.05, p.z); varG.add(tip);
+          put(p.r * 2 + 0.6, 0.8, p.rz * 2 + 0.6, C_WALL_TRIM, 0, 0.4, 0);
+          put(p.r * 2, 3.4, p.rz * 2, C_PILLAR, 0, 2.5, 0);
+          put(p.r * 1.5, 3.4, p.rz * 1.5, C_PILLAR, 0, 5.9, 0);
+          put(p.r * 1.05, 3.0, p.rz * 1.05, C_PILLAR, 0, 9.1, 0);
+          put(p.r * 0.7, 0.9, p.rz * 0.7, C_LAVA, 0, 11.05, 0);
         } else if (p.kind === 'wall') {
-          const w = box(p.r * 2, 4.2, p.rz * 2, C_WALL); w.position.set(p.x, 2.1, p.z); varG.add(w);
-          const t = box(p.r * 2 + 0.3, 0.5, p.rz * 2 + 0.3, C_WALL_TRIM); t.position.set(p.x, 4.35, p.z); varG.add(t);
-          const bqs = box(p.r * 2 + 0.4, 0.4, p.rz * 2 + 0.4, C_WALL_TRIM); bqs.position.set(p.x, 0.2, p.z); varG.add(bqs);
+          put(p.r * 2, 4.2, p.rz * 2, C_WALL, 0, 2.1, 0);
+          put(p.r * 2 + 0.3, 0.5, p.rz * 2 + 0.3, C_WALL_TRIM, 0, 4.35, 0);
+          put(p.r * 2 + 0.4, 0.4, p.rz * 2 + 0.4, C_WALL_TRIM, 0, 0.2, 0);
         } else if (p.kind === 'column') {
-          // готическая колонна: база, стройный ствол, капитель
-          const cb = box(p.r * 2 + 0.5, 0.6, p.rz * 2 + 0.5, C_WALL_TRIM); cb.position.set(p.x, 0.3, p.z); varG.add(cb);
-          const sh = box(p.r * 1.6, 5.4, p.rz * 1.6, C_PILLAR); sh.position.set(p.x, 3.3, p.z); varG.add(sh);
-          const cap = box(p.r * 2 + 0.4, 0.5, p.rz * 2 + 0.4, C_WALL_TRIM); cap.position.set(p.x, 6.25, p.z); varG.add(cap);
-          const top = box(p.r * 2, 0.4, p.rz * 2, C_PILLAR); top.position.set(p.x, 6.7, p.z); varG.add(top);
+          put(p.r * 2 + 0.5, 0.6, p.rz * 2 + 0.5, C_WALL_TRIM, 0, 0.3, 0);
+          put(p.r * 1.6, 5.4, p.rz * 1.6, C_PILLAR, 0, 3.3, 0);
+          put(p.r * 2 + 0.4, 0.5, p.rz * 2 + 0.4, C_WALL_TRIM, 0, 6.25, 0);
+          put(p.r * 2, 0.4, p.rz * 2, C_PILLAR, 0, 6.7, 0);
         } else if (p.kind === 'steps') {
-          // ступени: три яруса, поднимаются вдоль короткой оси (T поворачивает)
           const alongZ = p.rz <= p.r;
           const n = 3;
           for (let i = 0; i < n; i++) {
             const h = 0.55 * (i + 1);
             if (alongZ) {
-              const d = (p.rz * 2) / n;
-              const st = box(p.r * 2, h, d, i % 2 ? C_PILLAR : C_WALL_TRIM);
-              st.position.set(p.x, h / 2, p.z + p.rz - d * (i + 0.5));
-              varG.add(st);
+              const dd = (p.rz * 2) / n;
+              put(p.r * 2, h, dd, i % 2 ? C_PILLAR : C_WALL_TRIM, 0, h / 2, p.rz - dd * (i + 0.5));
             } else {
-              const d = (p.r * 2) / n;
-              const st = box(d, h, p.rz * 2, i % 2 ? C_PILLAR : C_WALL_TRIM);
-              st.position.set(p.x + p.r - d * (i + 0.5), h / 2, p.z);
-              varG.add(st);
+              const dd = (p.r * 2) / n;
+              put(dd, h, p.rz * 2, i % 2 ? C_PILLAR : C_WALL_TRIM, p.r - dd * (i + 0.5), h / 2, 0);
             }
           }
         } else if (p.kind === 'statue') {
-          // пьедестал
-          const pb = box(p.r * 2 + 0.4, 0.5, p.rz * 2 + 0.4, 0x3a2620); pb.position.set(p.x, 0.25, p.z); varG.add(pb);
-          const pd = box(p.r * 2, 1.7, p.rz * 2, 0x4c3228); pd.position.set(p.x, 1.35, p.z); varG.add(pd);
-          const pc = box(p.r * 2 + 0.3, 0.3, p.rz * 2 + 0.3, 0x3a2620); pc.position.set(p.x, 2.35, p.z); varG.add(pc);
-          // костяная фигура: ноги, торс, голова, левая рука вскинута вверх
+          put(p.r * 2 + 0.4, 0.5, p.rz * 2 + 0.4, 0x3a2620, 0, 0.25, 0);
+          put(p.r * 2, 1.7, p.rz * 2, 0x4c3228, 0, 1.35, 0);
+          put(p.r * 2 + 0.3, 0.3, p.rz * 2 + 0.3, 0x3a2620, 0, 2.35, 0);
           const B = 0xd8d2c0, BD = 0xb8b2a0;
-          const put = (w: number, h: number, dd: number, c: number, ox: number, oy: number, oz: number) => {
-            const m = box(w, h, dd, c); m.position.set(p.x + ox, 2.5 + oy, p.z + oz); varG.add(m);
-          };
-          put(0.34, 0.9, 0.4, BD, -0.28, 0.45, 0);      // ноги
-          put(0.34, 0.9, 0.4, BD, 0.28, 0.45, 0);
-          put(1.0, 1.1, 0.55, B, 0, 1.45, 0);           // торс
-          put(0.3, 0.8, 0.34, B, -0.62, 1.5, 0);        // правая рука вниз
-          put(0.3, 0.7, 0.34, B, 0.62, 1.85, 0);        // левое плечо вверх
-          put(0.26, 0.8, 0.3, B, 0.62, 2.55, 0);        // левая рука вскинута
-          put(0.3, 0.24, 0.3, BD, 0.62, 3.05, 0);       // кулак
-          put(0.5, 0.5, 0.45, B, 0, 2.3, 0);            // голова
-          put(0.5, 0.14, 0.2, BD, 0, 2.06, -0.2);       // челюсть
+          put(0.34, 0.9, 0.4, BD, -0.28, 2.95, 0);
+          put(0.34, 0.9, 0.4, BD, 0.28, 2.95, 0);
+          put(1.0, 1.1, 0.55, B, 0, 3.95, 0);
+          put(0.3, 0.8, 0.34, B, -0.62, 4.0, 0);
+          put(0.3, 0.7, 0.34, B, 0.62, 4.35, 0);
+          put(0.26, 0.8, 0.3, B, 0.62, 5.05, 0);
+          put(0.3, 0.24, 0.3, BD, 0.62, 5.55, 0);
+          put(0.5, 0.5, 0.45, B, 0, 4.8, 0);
+          put(0.5, 0.14, 0.2, BD, 0, 4.56, -0.2);
         } else if (p.kind === 'rock') {
-          // валуны: пара серых глыб
           let hsh = Math.abs(Math.round(p.x * 53 + p.z * 29)) + 3;
           const rnd = () => { hsh = (hsh * 1103515245 + 12345) & 0x7fffffff; return hsh / 0x7fffffff; };
           const n = 2 + Math.floor(rnd() * 2);
@@ -449,58 +474,34 @@ export const doom: MiniGame3D = {
           for (let i = 0; i < n; i++) {
             const w = p.r * (0.7 + rnd() * 0.9);
             const h = 0.6 + rnd() * (p.r * 1.1);
-            const rk = box(w, h, p.rz * (0.7 + rnd() * 0.9), RC[Math.floor(rnd() * RC.length)]);
-            rk.position.set(p.x + (rnd() - 0.5) * p.r, h / 2 - 0.05, p.z + (rnd() - 0.5) * p.rz);
-            rk.rotation.y = (rnd() - 0.5) * 0.9;
-            varG.add(rk);
+            put(w, h, p.rz * (0.7 + rnd() * 0.9), RC[Math.floor(rnd() * RC.length)],
+              (rnd() - 0.5) * p.r, h / 2 - 0.05, (rnd() - 0.5) * p.rz, (rnd() - 0.5) * 0.9);
           }
         } else if (p.kind === 'rubble') {
-          // завал: груда каменных обломков, непроходимая, но невысокая —
-          // видно, что «дальше был проход, но он обрушен»
           const CH = [C_PILLAR, C_WALL_TRIM, 0x6a5a4c, C_WALL];
           let hsh = Math.abs(Math.round(p.x * 31 + p.z * 17)) + 7;
           const rnd = () => { hsh = (hsh * 1103515245 + 12345) & 0x7fffffff; return hsh / 0x7fffffff; };
           const n = 9 + Math.floor(rnd() * 4);
           for (let i = 0; i < n; i++) {
             const w = 0.7 + rnd() * (p.r * 0.6);
-            const d = 0.6 + rnd() * (p.rz * 1.2);
+            const dd = 0.6 + rnd() * (p.rz * 1.2);
             const h = 0.5 + rnd() * 1.6;
-            const chunk = box(w, h, d, CH[Math.floor(rnd() * CH.length)]);
-            chunk.position.set(
-              p.x + (rnd() - 0.5) * (p.r * 2 - w),
-              h / 2 - 0.06 + rnd() * 0.3,
-              p.z + (rnd() - 0.5) * (p.rz * 2 - d),
-            );
-            chunk.rotation.y = (rnd() - 0.5) * 0.6;
-            varG.add(chunk);
+            put(w, h, dd, CH[Math.floor(rnd() * CH.length)],
+              (rnd() - 0.5) * (p.r * 2 - w), h / 2 - 0.06 + rnd() * 0.3, (rnd() - 0.5) * (p.rz * 2 - dd), (rnd() - 0.5) * 0.6);
           }
-          // пара крупных глыб сверху — силуэт холма
-          const big = box(p.r * 0.9, 1.4, p.rz * 1.1, C_PILLAR);
-          big.position.set(p.x, 1.5, p.z);
-          big.rotation.y = 0.2;
-          varG.add(big);
+          const big = put(p.r * 0.9, 1.4, p.rz * 1.1, C_PILLAR, 0, 1.5, 0, 0.2);
+          void big;
         } else if (p.kind === 'pyramid') {
-          // ступенчатая пирамида: пять ярусов от полного следа к вершине
           const tiers = 5;
           for (let i = 0; i < tiers; i++) {
             const k = 1 - i / tiers;
-            const tier = box(p.r * 2 * k, 1.7, p.rz * 2 * k, i % 2 ? C_PILLAR : C_WALL);
-            tier.position.set(p.x, 0.85 + i * 1.7, p.z);
-            varG.add(tier);
+            put(p.r * 2 * k, 1.7, p.rz * 2 * k, i % 2 ? C_PILLAR : C_WALL, 0, 0.85 + i * 1.7, 0);
           }
-          const tip = box(1.1, 1.1, 1.1, C_LAVA);
-          tip.position.set(p.x, tiers * 1.7 + 0.5, p.z);
-          varG.add(tip);
+          put(1.1, 1.1, 1.1, C_LAVA, 0, tiers * 1.7 + 0.5, 0);
         } else {
-          const col = box(p.r * 2, 5, p.rz * 2, C_PILLAR);
-          col.position.set(p.x, 2.5, p.z);
-          varG.add(col);
-          const cap = box(p.r * 2 + 0.5, 0.5, p.rz * 2 + 0.5, C_WALL_TRIM);
-          cap.position.set(p.x, 5.2, p.z);
-          varG.add(cap);
-          const base = box(p.r * 2 + 0.6, 0.4, p.rz * 2 + 0.6, C_WALL_TRIM);
-          base.position.set(p.x, 0.2, p.z);
-          varG.add(base);
+          put(p.r * 2, 5, p.rz * 2, C_PILLAR, 0, 2.5, 0);
+          put(p.r * 2 + 0.5, 0.5, p.rz * 2 + 0.5, C_WALL_TRIM, 0, 5.2, 0);
+          put(p.r * 2 + 0.6, 0.4, p.rz * 2 + 0.6, C_WALL_TRIM, 0, 0.2, 0);
           // череп — узнаваемая деталь больших пилонов (модель общая с меню)
           if (p.r > 2) {
             const skull = bakeStatic(buildProp('skull'));
@@ -948,7 +949,7 @@ export const doom: MiniGame3D = {
           return;
         }
         if (e.code === 'KeyX') { eClickR = true; return; }
-        if (e.code === 'KeyT') { eRot = !eRot; eSay(eRot ? 'ПОВОРОТ: ВДОЛЬ Z' : 'ПОВОРОТ: ВДОЛЬ X'); return; }
+        if (e.code === 'KeyT') { eRot = (eRot + 45) % 180; eSay(`ПОВОРОТ: ${eRot}°`); return; }
         if (e.code === 'KeyF') {
           eDef.ground = eDef.ground === 'sand' ? 'sand_road'
             : eDef.ground === 'sand_road' ? 'stone'
@@ -1381,16 +1382,19 @@ export const doom: MiniGame3D = {
     let gSel = 0;
     const vSel: number[] = E_GROUPS.map(() => 0);
     const curSlot = (): ESlot => E_GROUPS[gSel].items[vSel[gSel]];
-    let eRot = false;   // T: прямоугольный след вдоль X ↔ вдоль Z
+    let eRot = 0;   // T: поворот 0 → 45 → 90 → 135
+    /** описанный прямоугольник слота с учётом поворота (для границ и правил) */
     const slotDims = (sl: ESlot): { rx: number; rz: number } => {
       const rz = sl.rz ?? sl.r;
-      return eRot && rz !== sl.r ? { rx: rz, rz: sl.r } : { rx: sl.r, rz };
+      if (eRot === 90) return { rx: rz, rz: sl.r };
+      if (eRot === 45 || eRot === 135) { const e = (sl.r + rz) * 0.7071; return { rx: e, rz: e }; }
+      return { rx: sl.r, rz };
     };
     let eDef: ArenaDef = structuredClone(A);
     let eX = 0, eY = 9, eZ = 24, eYaw = 0, ePitch = -0.5;
     let eMsg = '', eMsgT = 0;
     let eClickL = false, eClickR = false;
-    interface EFound { type: 'pillar' | 'torch' | 'seal' | 'pickup'; ix: number; x: number; z: number; r: number; rz: number; h: number }
+    interface EFound { type: 'pillar' | 'torch' | 'seal' | 'pickup'; ix: number; x: number; z: number; r: number; rz: number; rot: number; h: number }
     let eAim: { x: number; z: number; ok: boolean } | null = null;
     let eFound: EFound | null = null;
 
@@ -1499,22 +1503,35 @@ export const doom: MiniGame3D = {
     };
 
     /** пересечение квадратных следов: занято ли место (x,z,r) чем-то из eDef */
-    const eBlocked = (x: number, z: number, rx: number, rz: number, placingDais = false): boolean => {
+    /** наслаивание разрешено; запрещены только пары, ломающие геймплей:
+     *  печать/старт не должны оказаться внутри непроходимой структуры */
+    const pExt = (p: { r: number; rz?: number; rot?: number }): [number, number] => {
+      const rz = p.rz ?? p.r, rot = p.rot ?? 0;
+      return rot === 0 ? [p.r, rz] : rot === 90 ? [rz, p.r] : [(p.r + rz) * 0.7071, (p.r + rz) * 0.7071];
+    };
+    const eBlocked = (x: number, z: number, rx: number, rz: number, slot: ESlot): boolean => {
       const hit = (ox: number, oz: number, orx: number, orz: number) =>
         Math.abs(x - ox) < rx + orx && Math.abs(z - oz) < rz + orz;
-      for (const p of eDef.pillars) {
-        const isDais = p.kind === 'dais';
-        // платформа проходима: на ней можно ставить что угодно, а её саму —
-        // поверх чего угодно, кроме другой платформы
-        if (placingDais !== isDais) continue;
-        if (hit(p.x, p.z, p.r, p.rz ?? p.r)) return true;
+      const solidKinds = new Set(['block', 'obelisk', 'wall', 'pyramid', 'rubble', 'column', 'steps', 'rock', 'statue']);
+      const placingSolid = slot.kind === 'pillar' && slot.pk !== 'dais';
+      if (placingSolid) {
+        // структуру нельзя ронять на печать или на точку старта
+        for (const sl of eDef.seals) if (hit(sl.x, sl.z, 2.0, 2.0)) return true;
+        if (hit(eDef.start.x, eDef.start.z, 0.6, 0.6)) return true;
+        return false;
       }
-      if (placingDais) return false;
-      for (const t of eDef.torches) if (hit(t.x, t.z, 0.6, 0.6)) return true;
-      for (const sl of eDef.seals) if (hit(sl.x, sl.z, 2.0, 2.0)) return true;
-      for (const pk of eDef.pickups) if (hit(pk.x, pk.z, 0.6, 0.6)) return true;
-      if (hit(eDef.start.x, eDef.start.z, 0.6, 0.6)) return true;
-      return false;
+      if (slot.kind === 'seal' || slot.kind === 'start') {
+        for (const p of eDef.pillars) {
+          if (!solidKinds.has(p.kind ?? 'block')) continue;
+          const [ex, ez] = pExt(p);
+          if (hit(p.x, p.z, ex, ez)) return true;
+        }
+        if (slot.kind === 'seal') {
+          for (const sl of eDef.seals) if (hit(sl.x, sl.z, 2.0, 2.0)) return true;   // печати не в стопку
+        }
+        return false;
+      }
+      return false;   // пикапы, факелы, платформы — куда угодно
     };
     /** что стоит в точке прицела (для удаления) — сначала мелкое, потом крупное */
     const eFind = (x: number, z: number): EFound | null => {
@@ -1522,15 +1539,15 @@ export const doom: MiniGame3D = {
         Math.abs(x - ox) <= orx + 0.35 && Math.abs(z - oz) <= orz + 0.35;
       for (let i = 0; i < eDef.pickups.length; i++) {
         const p = eDef.pickups[i];
-        if (at(p.x, p.z, 0.6, 0.6)) return { type: 'pickup', ix: i, x: p.x, z: p.z, r: 0.7, rz: 0.7, h: 1.0 };
+        if (at(p.x, p.z, 0.6, 0.6)) return { type: 'pickup', ix: i, x: p.x, z: p.z, r: 0.7, rz: 0.7, rot: 0, h: 1.0 };
       }
       for (let i = 0; i < eDef.torches.length; i++) {
         const t = eDef.torches[i];
-        if (at(t.x, t.z, 0.6, 0.6)) return { type: 'torch', ix: i, x: t.x, z: t.z, r: 0.5, rz: 0.5, h: 4.1 };
+        if (at(t.x, t.z, 0.6, 0.6)) return { type: 'torch', ix: i, x: t.x, z: t.z, r: 0.5, rz: 0.5, rot: 0, h: 4.1 };
       }
       for (let i = 0; i < eDef.seals.length; i++) {
         const sl = eDef.seals[i];
-        if (at(sl.x, sl.z, 2.0, 2.0)) return { type: 'seal', ix: i, x: sl.x, z: sl.z, r: 2.0, rz: 2.0, h: 0.5 };
+        if (at(sl.x, sl.z, 2.0, 2.0)) return { type: 'seal', ix: i, x: sl.x, z: sl.z, r: 2.0, rz: 2.0, rot: 0, h: 0.5 };
       }
       for (let pass = 0; pass < 2; pass++) {
         for (let i = 0; i < eDef.pillars.length; i++) {
@@ -1541,7 +1558,7 @@ export const doom: MiniGame3D = {
           const hh = pl.kind === 'obelisk' ? 12 : pl.kind === 'wall' ? 4.7 : pl.kind === 'pyramid' ? 9.4
             : pl.kind === 'column' ? 7.2 : pl.kind === 'statue' ? 6.1 : pl.kind === 'steps' ? 2.0
               : pl.kind === 'dais' ? 1.2 : pl.kind === 'rock' ? 1.8 : pl.kind === 'rubble' ? 2.6 : 5.4;
-          if (at(pl.x, pl.z, pl.r, prz)) return { type: 'pillar', ix: i, x: pl.x, z: pl.z, r: pl.r + 0.3, rz: prz + 0.3, h: hh };
+          if (at(pl.x, pl.z, pl.r, prz)) return { type: 'pillar', ix: i, x: pl.x, z: pl.z, r: pl.r + 0.3, rz: prz + 0.3, rot: pl.rot ?? 0, h: hh };
         }
       }
       return null;
@@ -1588,7 +1605,7 @@ export const doom: MiniGame3D = {
             const limX = sl.kind === 'torch' ? ARENA - 1 : sl.kind === 'pillar' ? Math.floor(ARENA - 1 - d.rx) : ARENA - 2;
             const limZ = sl.kind === 'torch' ? ARENA - 1 : sl.kind === 'pillar' ? Math.floor(ARENA - 1 - d.rz) : ARENA - 2;
             const inB = Math.abs(cx) <= limX && Math.abs(cz) <= limZ;
-            eAim = { x: cx, z: cz, ok: inB && !eBlocked(cx, cz, d.rx, d.rz, sl.pk === 'dais') };
+            eAim = { x: cx, z: cz, ok: inB && !eBlocked(cx, cz, d.rx, d.rz, sl) };
           }
         }
       }
@@ -1598,12 +1615,14 @@ export const doom: MiniGame3D = {
       if (eFound) {
         wire.visible = true;
         wire.scale.set(eFound.r * 2, eFound.h, eFound.rz * 2);
+        wire.rotation.y = (eFound.rot * Math.PI) / 180;
         wire.position.set(eFound.x, eFound.h / 2, eFound.z);
       } else wire.visible = false;
       if (eAim && !eFound) {
         ghost.visible = true;
-        const gd = slotDims(sl);
-        ghost.scale.set(gd.rx * 2, sl.h, gd.rz * 2);
+        // призрак показывает НАСТОЯЩИЙ след с поворотом, не описанную рамку
+        ghost.scale.set(sl.r * 2, sl.h, (sl.rz ?? sl.r) * 2);
+        ghost.rotation.y = (eRot * Math.PI) / 180;
         ghost.position.set(eAim.x, sl.h / 2, eAim.z);
         (ghost.material as THREE.MeshBasicMaterial).color.setHex(eAim.ok ? 0x40ff70 : 0xff4030);
       } else ghost.visible = false;
@@ -1616,11 +1635,10 @@ export const doom: MiniGame3D = {
           if (sl.kind === 'pillar') {
             if (c.pillars >= ARENA_CAPS.pillars) eSay(`ПИЛОНОВ НЕ БОЛЬШЕ ${ARENA_CAPS.pillars}`);
             else {
-              const d = slotDims(sl);
               eDef.pillars.push(
-                sl.pk === 'block'
+                sl.pk === 'block' && !eRot
                   ? { x: eAim.x, z: eAim.z, r: sl.r }
-                  : { x: eAim.x, z: eAim.z, r: d.rx, rz: d.rz, kind: sl.pk },
+                  : { x: eAim.x, z: eAim.z, r: sl.r, rz: sl.rz ?? sl.r, kind: sl.pk, ...(eRot ? { rot: eRot } : {}) },
               );
               rebuildEditor();
             }
@@ -1900,7 +1918,7 @@ export const doom: MiniGame3D = {
       g.font = '11px ui-monospace, monospace';
       g.fillStyle = '#7a5a50';
       g.fillText(
-        'ЛКМ поставить · ПКМ/X убрать · цифра — категория (повтор листает) · колесо — все варианты · T поворот' +
+        'ЛКМ поставить · ПКМ/X убрать · цифра — категория (повтор листает) · колесо — все варианты · T поворот 45°' +
         ' · WASD+SPACE/SHIFT полёт (R быстрее) · −/+ размер · B небо · F пол · G тест · Q титул · K/L сохранить/загрузить · E/I экспорт/импорт',
         W / 2, y0 - 10,
       );
@@ -2256,7 +2274,7 @@ export const doom: MiniGame3D = {
       nz = Math.max(-lim, Math.min(lim, nz));
       for (const p of pillars) {
         const dx = nx - p.x, dz = nz - p.z;
-        const needX = p.r + r, needZ = p.rz + r;
+        const needX = p.ex + r, needZ = p.ez + r;
         // прямоугольный след: выталкиваем по оси с меньшим проникновением
         if (Math.abs(dx) < needX && Math.abs(dz) < needZ) {
           if (needX - Math.abs(dx) < needZ - Math.abs(dz)) nx = p.x + Math.sign(dx || 1) * needX;
@@ -2269,7 +2287,7 @@ export const doom: MiniGame3D = {
     /** точка внутри пилона (пилоны — квадраты в плане) */
     const inPillar = (x: number, z: number, pad = 0) => {
       for (const p of pillars) {
-        if (Math.abs(x - p.x) < p.r + pad && Math.abs(z - p.z) < p.rz + pad) return true;
+        if (Math.abs(x - p.x) < p.ex + pad && Math.abs(z - p.z) < p.ez + pad) return true;
       }
       return false;
     };
@@ -2279,17 +2297,17 @@ export const doom: MiniGame3D = {
       for (const p of pillars) {
         let t0 = 0, t1 = 1;
         if (Math.abs(dx) < 1e-6) {
-          if (x0 < p.x - p.r || x0 > p.x + p.r) continue;
+          if (x0 < p.x - p.ex || x0 > p.x + p.ex) continue;
         } else {
-          let ta = (p.x - p.r - x0) / dx, tb = (p.x + p.r - x0) / dx;
+          let ta = (p.x - p.ex - x0) / dx, tb = (p.x + p.ex - x0) / dx;
           if (ta > tb) { const sw = ta; ta = tb; tb = sw; }
           t0 = Math.max(t0, ta); t1 = Math.min(t1, tb);
           if (t0 > t1) continue;
         }
         if (Math.abs(dz) < 1e-6) {
-          if (z0 < p.z - p.rz || z0 > p.z + p.rz) continue;
+          if (z0 < p.z - p.ez || z0 > p.z + p.ez) continue;
         } else {
-          let ta = (p.z - p.rz - z0) / dz, tb = (p.z + p.rz - z0) / dz;
+          let ta = (p.z - p.ez - z0) / dz, tb = (p.z + p.ez - z0) / dz;
           if (ta > tb) { const sw = ta; ta = tb; tb = sw; }
           t0 = Math.max(t0, ta); t1 = Math.min(t1, tb);
           if (t0 > t1) continue;
@@ -2572,6 +2590,7 @@ export const doom: MiniGame3D = {
         const d = MDEFS[m.kind];
         m.t += dt;
         const wasX = m.x, wasZ = m.z;   // для разворота по фактическому движению
+        if (!MDEFS[m.kind].flying) m.grp.position.y = 0;   // анимация пишет поверх, высота пола добавится в конце
         if (m.atkCd > 0) m.atkCd -= dt;
         if (m.hurtT > 0) m.hurtT -= dt;
         const dx = px - m.x, dz = pz - m.z;
