@@ -221,7 +221,7 @@ export const doom: MiniGame3D = {
     let ARENA = A.size;   // полуразмер: обновляется при пересборке арены
 
     // всё строится в buildArenaLive: размер арены теперь часть ArenaDef
-    interface Pillar { x: number; z: number; r: number }
+    interface Pillar { x: number; z: number; r: number; rz: number; kind: 'block' | 'obelisk' | 'wall' | 'pyramid' }
     interface Torch { light: THREE.PointLight; flame: THREE.Mesh; ph: number }
     let pillars: Pillar[] = [];
     let torches: Torch[] = [];
@@ -261,32 +261,60 @@ export const doom: MiniGame3D = {
         [0, -ARENA - 9, ARENA * 2 + 26, 18], [0, ARENA + 9, ARENA * 2 + 26, 18],
         [-ARENA - 9, 0, 18, ARENA * 2 + 2], [ARENA + 9, 0, 18, ARENA * 2 + 2],
       ] as [number, number, number, number][]) {
+        // Basic, не Standard: лава сама светится, а PBR на четырёх экранных
+        // плоскостях перемножал каждый пиксель на все ~25 источников сцены —
+        // взгляд на лаву в упор ронял кадры
         const lava = new THREE.Mesh(
           new THREE.BoxGeometry(lw, 0.3, ld),
-          new THREE.MeshStandardMaterial({ color: C_LAVA, emissive: 0xff5a1e, emissiveIntensity: 0.9, roughness: 1 }),
+          new THREE.MeshBasicMaterial({ color: 0xf26418 }),
         );
         lava.position.set(lx, -0.9, lz);
         ctx.scene.add(lava);
         arenaBits.push(lava);
       }
-      pillars = def.pillars.map((p) => ({ ...p }));
+      pillars = def.pillars.map((p) => ({ x: p.x, z: p.z, r: p.r, rz: p.rz ?? p.r, kind: p.kind ?? 'block' }));
       for (const p of pillars) {
-        const col = box(p.r * 2, 5, p.r * 2, C_PILLAR);
-        col.position.set(p.x, 2.5, p.z);
-        varG.add(col);
-        const cap = box(p.r * 2 + 0.5, 0.5, p.r * 2 + 0.5, C_WALL_TRIM);
-        cap.position.set(p.x, 5.2, p.z);
-        varG.add(cap);
-        const base = box(p.r * 2 + 0.6, 0.4, p.r * 2 + 0.6, C_WALL_TRIM);
-        base.position.set(p.x, 0.2, p.z);
-        varG.add(base);
-        // череп — узнаваемая деталь больших пилонов (модель общая с меню)
-        if (p.r > 2) {
-          const skull = bakeStatic(buildProp('skull'));
-          skull.scale.setScalar(1.25);
-          skull.position.set(p.x, 2.5, p.z - p.r - 0.15);
-          ctx.scene.add(skull);
-          arenaBits.push(skull);
+        if (p.kind === 'obelisk') {
+          // гранёный обелиск: ступени сужаются, наверху пирамидка
+          const b1 = box(p.r * 2 + 0.6, 0.8, p.rz * 2 + 0.6, C_WALL_TRIM); b1.position.set(p.x, 0.4, p.z); varG.add(b1);
+          const b2 = box(p.r * 2, 3.4, p.rz * 2, C_PILLAR); b2.position.set(p.x, 2.5, p.z); varG.add(b2);
+          const b3 = box(p.r * 1.5, 3.4, p.rz * 1.5, C_PILLAR); b3.position.set(p.x, 5.9, p.z); varG.add(b3);
+          const b4 = box(p.r * 1.05, 3.0, p.rz * 1.05, C_PILLAR); b4.position.set(p.x, 9.1, p.z); varG.add(b4);
+          const tip = box(p.r * 0.7, 0.9, p.rz * 0.7, C_LAVA); tip.position.set(p.x, 11.05, p.z); varG.add(tip);
+        } else if (p.kind === 'wall') {
+          const w = box(p.r * 2, 4.2, p.rz * 2, C_WALL); w.position.set(p.x, 2.1, p.z); varG.add(w);
+          const t = box(p.r * 2 + 0.3, 0.5, p.rz * 2 + 0.3, C_WALL_TRIM); t.position.set(p.x, 4.35, p.z); varG.add(t);
+          const bqs = box(p.r * 2 + 0.4, 0.4, p.rz * 2 + 0.4, C_WALL_TRIM); bqs.position.set(p.x, 0.2, p.z); varG.add(bqs);
+        } else if (p.kind === 'pyramid') {
+          // ступенчатая пирамида: пять ярусов от полного следа к вершине
+          const tiers = 5;
+          for (let i = 0; i < tiers; i++) {
+            const k = 1 - i / tiers;
+            const tier = box(p.r * 2 * k, 1.7, p.rz * 2 * k, i % 2 ? C_PILLAR : C_WALL);
+            tier.position.set(p.x, 0.85 + i * 1.7, p.z);
+            varG.add(tier);
+          }
+          const tip = box(1.1, 1.1, 1.1, C_LAVA);
+          tip.position.set(p.x, tiers * 1.7 + 0.5, p.z);
+          varG.add(tip);
+        } else {
+          const col = box(p.r * 2, 5, p.rz * 2, C_PILLAR);
+          col.position.set(p.x, 2.5, p.z);
+          varG.add(col);
+          const cap = box(p.r * 2 + 0.5, 0.5, p.rz * 2 + 0.5, C_WALL_TRIM);
+          cap.position.set(p.x, 5.2, p.z);
+          varG.add(cap);
+          const base = box(p.r * 2 + 0.6, 0.4, p.rz * 2 + 0.6, C_WALL_TRIM);
+          base.position.set(p.x, 0.2, p.z);
+          varG.add(base);
+          // череп — узнаваемая деталь больших пилонов (модель общая с меню)
+          if (p.r > 2) {
+            const skull = bakeStatic(buildProp('skull'));
+            skull.scale.setScalar(1.25);
+            skull.position.set(p.x, 2.5, p.z - p.rz - 0.15);
+            ctx.scene.add(skull);
+            arenaBits.push(skull);
+          }
         }
       }
       torches = [];
@@ -716,6 +744,7 @@ export const doom: MiniGame3D = {
         const mD = /^Digit(\d)$/.exec(e.code);
         if (mD) { eSlot = mD[1] === '0' ? 9 : Number(mD[1]) - 1; return; }
         if (e.code === 'KeyX') { eClickR = true; return; }
+        if (e.code === 'KeyT') { eRot = !eRot; eSay(eRot ? 'СТЕНА: ВДОЛЬ Z' : 'СТЕНА: ВДОЛЬ X'); return; }
         if (e.code === 'KeyG') { testPlayFromEditor(); return; }
         if (e.code === 'KeyQ') { exitEditorToTitle(); return; }
         if (e.code === 'KeyE') {
@@ -747,7 +776,7 @@ export const doom: MiniGame3D = {
           const B = ns - 2;
           const dropped =
             eDef.pillars.length + eDef.torches.length + eDef.seals.length + eDef.pickups.length;
-          eDef.pillars = eDef.pillars.filter((o) => Math.abs(o.x) <= ns - 1 - o.r && Math.abs(o.z) <= ns - 1 - o.r);
+          eDef.pillars = eDef.pillars.filter((o) => Math.abs(o.x) <= ns - 1 - o.r && Math.abs(o.z) <= ns - 1 - (o.rz ?? o.r));
           eDef.torches = eDef.torches.filter((o) => Math.abs(o.x) <= ns - 1 && Math.abs(o.z) <= ns - 1);
           eDef.seals = eDef.seals.filter((o) => Math.abs(o.x) <= B && Math.abs(o.z) <= B);
           eDef.pickups = eDef.pickups.filter((o) => Math.abs(o.x) <= B && Math.abs(o.z) <= B);
@@ -1066,10 +1095,18 @@ export const doom: MiniGame3D = {
     // Полёт от первого лица, хотбар на 10 слотов, прицел подсвечивает клетку:
     // ЛКМ ставит, ПКМ/X убирает, 0-9 и колесо выбирают слот. Правки сразу
     // пересобирают арену (bakeStatic дёшев) и автосохраняются в localStorage.
-    interface ESlot { name: string; r: number; h: number; kind: 'pillar' | 'torch' | 'seal' | 'start' | 'med' | 'arm' | 'bul' | 'shl' | 'box' }
+    interface ESlot {
+      name: string; r: number; rz?: number; h: number;
+      kind: 'pillar' | 'torch' | 'seal' | 'start' | 'med' | 'arm' | 'bul' | 'shl' | 'box';
+      /** тип структуры для kind=pillar */
+      pk?: 'block' | 'obelisk' | 'wall' | 'pyramid';
+    }
     const E_SLOTS: ESlot[] = [
-      { name: 'ПИЛОН', r: 1.6, h: 5, kind: 'pillar' },
-      { name: 'ПИЛОН+', r: 2.2, h: 5, kind: 'pillar' },
+      { name: 'ПИЛОН', r: 1.6, h: 5, kind: 'pillar', pk: 'block' },
+      { name: 'ПИЛОН+', r: 2.2, h: 5, kind: 'pillar', pk: 'block' },
+      { name: 'ОБЕЛИСК', r: 1.2, h: 11.5, kind: 'pillar', pk: 'obelisk' },
+      { name: 'СТЕНА', r: 2.5, rz: 0.7, h: 4.4, kind: 'pillar', pk: 'wall' },
+      { name: 'ПИРАМИДА', r: 6, h: 9, kind: 'pillar', pk: 'pyramid' },
       { name: 'ФАКЕЛ', r: 0.6, h: 3.9, kind: 'torch' },
       { name: 'ПЕЧАТЬ', r: 2.0, h: 0.3, kind: 'seal' },
       { name: 'АПТЕЧКА', r: 0.6, h: 0.9, kind: 'med' },
@@ -1079,12 +1116,17 @@ export const doom: MiniGame3D = {
       { name: 'ЯЩИК', r: 0.6, h: 0.9, kind: 'box' },
       { name: 'СТАРТ', r: 0.6, h: 1.9, kind: 'start' },
     ];
+    let eRot = false;   // T: стена вдоль X ↔ вдоль Z
+    const slotDims = (sl: ESlot): { rx: number; rz: number } => {
+      const rz = sl.rz ?? sl.r;
+      return eRot && sl.pk === 'wall' ? { rx: rz, rz: sl.r } : { rx: sl.r, rz };
+    };
     let eDef: ArenaDef = structuredClone(A);
     let eSlot = 0;
     let eX = 0, eY = 9, eZ = 24, eYaw = 0, ePitch = -0.5;
     let eMsg = '', eMsgT = 0;
     let eClickL = false, eClickR = false;
-    interface EFound { type: 'pillar' | 'torch' | 'seal' | 'pickup'; ix: number; x: number; z: number; r: number; h: number }
+    interface EFound { type: 'pillar' | 'torch' | 'seal' | 'pickup'; ix: number; x: number; z: number; r: number; rz: number; h: number }
     let eAim: { x: number; z: number; ok: boolean } | null = null;
     let eFound: EFound | null = null;
 
@@ -1193,46 +1235,37 @@ export const doom: MiniGame3D = {
     };
 
     /** пересечение квадратных следов: занято ли место (x,z,r) чем-то из eDef */
-    const eBlocked = (x: number, z: number, r: number, skip?: EFound): boolean => {
-      const hit = (ox: number, oz: number, or_: number) => Math.max(Math.abs(x - ox), Math.abs(z - oz)) < r + or_;
-      for (let i = 0; i < eDef.pillars.length; i++) {
-        const p = eDef.pillars[i];
-        if (skip?.type === 'pillar' && skip.ix === i) continue;
-        if (hit(p.x, p.z, p.r)) return true;
-      }
-      for (let i = 0; i < eDef.torches.length; i++) {
-        if (skip?.type === 'torch' && skip.ix === i) continue;
-        if (hit(eDef.torches[i].x, eDef.torches[i].z, 0.6)) return true;
-      }
-      for (let i = 0; i < eDef.seals.length; i++) {
-        if (skip?.type === 'seal' && skip.ix === i) continue;
-        if (hit(eDef.seals[i].x, eDef.seals[i].z, 2.0)) return true;
-      }
-      for (let i = 0; i < eDef.pickups.length; i++) {
-        if (skip?.type === 'pickup' && skip.ix === i) continue;
-        if (hit(eDef.pickups[i].x, eDef.pickups[i].z, 0.6)) return true;
-      }
-      if (hit(eDef.start.x, eDef.start.z, 0.6)) return true;
+    const eBlocked = (x: number, z: number, rx: number, rz: number): boolean => {
+      const hit = (ox: number, oz: number, orx: number, orz: number) =>
+        Math.abs(x - ox) < rx + orx && Math.abs(z - oz) < rz + orz;
+      for (const p of eDef.pillars) if (hit(p.x, p.z, p.r, p.rz ?? p.r)) return true;
+      for (const t of eDef.torches) if (hit(t.x, t.z, 0.6, 0.6)) return true;
+      for (const sl of eDef.seals) if (hit(sl.x, sl.z, 2.0, 2.0)) return true;
+      for (const pk of eDef.pickups) if (hit(pk.x, pk.z, 0.6, 0.6)) return true;
+      if (hit(eDef.start.x, eDef.start.z, 0.6, 0.6)) return true;
       return false;
     };
     /** что стоит в точке прицела (для удаления) — сначала мелкое, потом крупное */
     const eFind = (x: number, z: number): EFound | null => {
-      const at = (ox: number, oz: number, or_: number) => Math.max(Math.abs(x - ox), Math.abs(z - oz)) <= or_ + 0.35;
+      const at = (ox: number, oz: number, orx: number, orz: number) =>
+        Math.abs(x - ox) <= orx + 0.35 && Math.abs(z - oz) <= orz + 0.35;
       for (let i = 0; i < eDef.pickups.length; i++) {
         const p = eDef.pickups[i];
-        if (at(p.x, p.z, 0.6)) return { type: 'pickup', ix: i, x: p.x, z: p.z, r: 0.7, h: 1.0 };
+        if (at(p.x, p.z, 0.6, 0.6)) return { type: 'pickup', ix: i, x: p.x, z: p.z, r: 0.7, rz: 0.7, h: 1.0 };
       }
       for (let i = 0; i < eDef.torches.length; i++) {
         const t = eDef.torches[i];
-        if (at(t.x, t.z, 0.6)) return { type: 'torch', ix: i, x: t.x, z: t.z, r: 0.5, h: 4.1 };
+        if (at(t.x, t.z, 0.6, 0.6)) return { type: 'torch', ix: i, x: t.x, z: t.z, r: 0.5, rz: 0.5, h: 4.1 };
       }
       for (let i = 0; i < eDef.seals.length; i++) {
         const sl = eDef.seals[i];
-        if (at(sl.x, sl.z, 2.0)) return { type: 'seal', ix: i, x: sl.x, z: sl.z, r: 2.0, h: 0.5 };
+        if (at(sl.x, sl.z, 2.0, 2.0)) return { type: 'seal', ix: i, x: sl.x, z: sl.z, r: 2.0, rz: 2.0, h: 0.5 };
       }
       for (let i = 0; i < eDef.pillars.length; i++) {
         const pl = eDef.pillars[i];
-        if (at(pl.x, pl.z, pl.r)) return { type: 'pillar', ix: i, x: pl.x, z: pl.z, r: pl.r + 0.3, h: 5.4 };
+        const prz = pl.rz ?? pl.r;
+        const hh = pl.kind === 'obelisk' ? 12 : pl.kind === 'wall' ? 4.7 : pl.kind === 'pyramid' ? 9.4 : 5.4;
+        if (at(pl.x, pl.z, pl.r, prz)) return { type: 'pillar', ix: i, x: pl.x, z: pl.z, r: pl.r + 0.3, rz: prz + 0.3, h: hh };
       }
       return null;
     };
@@ -1274,9 +1307,11 @@ export const doom: MiniGame3D = {
             const cx = Math.round(hx), cz = Math.round(hz);
             eFound = eFind(hx, hz);
             const sl = E_SLOTS[eSlot];
-            const lim = sl.kind === 'torch' ? ARENA - 1 : sl.kind === 'pillar' ? Math.floor(ARENA - 1 - sl.r) : ARENA - 2;
-            const inB = Math.abs(cx) <= lim && Math.abs(cz) <= lim;
-            eAim = { x: cx, z: cz, ok: inB && !eBlocked(cx, cz, sl.r) };
+            const d = slotDims(sl);
+            const limX = sl.kind === 'torch' ? ARENA - 1 : sl.kind === 'pillar' ? Math.floor(ARENA - 1 - d.rx) : ARENA - 2;
+            const limZ = sl.kind === 'torch' ? ARENA - 1 : sl.kind === 'pillar' ? Math.floor(ARENA - 1 - d.rz) : ARENA - 2;
+            const inB = Math.abs(cx) <= limX && Math.abs(cz) <= limZ;
+            eAim = { x: cx, z: cz, ok: inB && !eBlocked(cx, cz, d.rx, d.rz) };
           }
         }
       }
@@ -1285,12 +1320,13 @@ export const doom: MiniGame3D = {
       const sl = E_SLOTS[eSlot];
       if (eFound) {
         wire.visible = true;
-        wire.scale.set(eFound.r * 2, eFound.h, eFound.r * 2);
+        wire.scale.set(eFound.r * 2, eFound.h, eFound.rz * 2);
         wire.position.set(eFound.x, eFound.h / 2, eFound.z);
       } else wire.visible = false;
       if (eAim && !eFound) {
         ghost.visible = true;
-        ghost.scale.set(sl.r * 2, sl.h, sl.r * 2);
+        const gd = slotDims(sl);
+        ghost.scale.set(gd.rx * 2, sl.h, gd.rz * 2);
         ghost.position.set(eAim.x, sl.h / 2, eAim.z);
         (ghost.material as THREE.MeshBasicMaterial).color.setHex(eAim.ok ? 0x40ff70 : 0xff4030);
       } else ghost.visible = false;
@@ -1302,7 +1338,15 @@ export const doom: MiniGame3D = {
           const c = eCounts();
           if (sl.kind === 'pillar') {
             if (c.pillars >= ARENA_CAPS.pillars) eSay(`ПИЛОНОВ НЕ БОЛЬШЕ ${ARENA_CAPS.pillars}`);
-            else { eDef.pillars.push({ x: eAim.x, z: eAim.z, r: sl.r }); rebuildEditor(); }
+            else {
+              const d = slotDims(sl);
+              eDef.pillars.push(
+                sl.pk === 'block'
+                  ? { x: eAim.x, z: eAim.z, r: sl.r }
+                  : { x: eAim.x, z: eAim.z, r: d.rx, rz: d.rz, kind: sl.pk },
+              );
+              rebuildEditor();
+            }
           } else if (sl.kind === 'torch') {
             if (c.torches >= ARENA_CAPS.torches) eSay(`ФАКЕЛОВ НЕ БОЛЬШЕ ${ARENA_CAPS.torches}`);
             else { eDef.torches.push({ x: eAim.x, z: eAim.z }); rebuildEditor(); }
@@ -1555,7 +1599,7 @@ export const doom: MiniGame3D = {
         g.textAlign = 'left';
         g.fillStyle = sel ? '#e8c840' : '#8a6a5a';
         g.font = '10px ui-monospace, monospace';
-        g.fillText(`${(i + 1) % 10}`, x + 4, y0 + 12);
+        if (i < 10) g.fillText(`${(i + 1) % 10}`, x + 4, y0 + 12);   // дальше — только колесом
         g.textAlign = 'center';
         fitFont(g, E_SLOTS[i].name, sw - 6, 11, FAM);
         g.fillText(E_SLOTS[i].name, x + sw / 2, y0 + sh - 8);
@@ -1566,8 +1610,8 @@ export const doom: MiniGame3D = {
       g.font = '11px ui-monospace, monospace';
       g.fillStyle = '#7a5a50';
       g.fillText(
-        'ЛКМ поставить · ПКМ/X убрать · 0-9/колесо слот · WASD+SPACE/SHIFT полёт (R быстрее) · −/+ размер · B небо' +
-        ' · G тест · Q титул · K сохранить как · L загрузить · N базовая · E/I экспорт/импорт',
+        'ЛКМ поставить · ПКМ/X убрать · 0-9/колесо слот · T поворот стены · WASD+SPACE/SHIFT полёт (R быстрее) · −/+ размер' +
+        ' · B небо · G тест · Q титул · K сохранить как · L загрузить · N базовая · E/I экспорт/импорт',
         W / 2, y0 - 10,
       );
       if (eMsgT > 0) {
@@ -1885,11 +1929,11 @@ export const doom: MiniGame3D = {
       nz = Math.max(-lim, Math.min(lim, nz));
       for (const p of pillars) {
         const dx = nx - p.x, dz = nz - p.z;
-        const need = p.r + r;
-        // квадратный пилон: выталкиваем по меньшей оси
-        if (Math.abs(dx) < need && Math.abs(dz) < need) {
-          if (Math.abs(dx) > Math.abs(dz)) nx = p.x + Math.sign(dx || 1) * need;
-          else nz = p.z + Math.sign(dz || 1) * need;
+        const needX = p.r + r, needZ = p.rz + r;
+        // прямоугольный след: выталкиваем по оси с меньшим проникновением
+        if (Math.abs(dx) < needX && Math.abs(dz) < needZ) {
+          if (needX - Math.abs(dx) < needZ - Math.abs(dz)) nx = p.x + Math.sign(dx || 1) * needX;
+          else nz = p.z + Math.sign(dz || 1) * needZ;
         }
       }
       return [nx, nz];
@@ -1898,7 +1942,7 @@ export const doom: MiniGame3D = {
     /** точка внутри пилона (пилоны — квадраты в плане) */
     const inPillar = (x: number, z: number, pad = 0) => {
       for (const p of pillars) {
-        if (Math.abs(x - p.x) < p.r + pad && Math.abs(z - p.z) < p.r + pad) return true;
+        if (Math.abs(x - p.x) < p.r + pad && Math.abs(z - p.z) < p.rz + pad) return true;
       }
       return false;
     };
@@ -1916,9 +1960,9 @@ export const doom: MiniGame3D = {
           if (t0 > t1) continue;
         }
         if (Math.abs(dz) < 1e-6) {
-          if (z0 < p.z - p.r || z0 > p.z + p.r) continue;
+          if (z0 < p.z - p.rz || z0 > p.z + p.rz) continue;
         } else {
-          let ta = (p.z - p.r - z0) / dz, tb = (p.z + p.r - z0) / dz;
+          let ta = (p.z - p.rz - z0) / dz, tb = (p.z + p.rz - z0) / dz;
           if (ta > tb) { const sw = ta; ta = tb; tb = sw; }
           t0 = Math.max(t0, ta); t1 = Math.min(t1, tb);
           if (t0 > t1) continue;

@@ -56,12 +56,20 @@ export const ROCKET = { splash: 70, radius: 5.5, self: 0.35, speed: 24, life: 3.
 
 export type ArenaPickupKind = 'med' | 'arm' | 'bul' | 'shl' | 'box';
 export type ArenaSky = 'hell' | 'dusk' | 'day';
+export type ArenaPillarKind = 'block' | 'obelisk' | 'wall' | 'pyramid';
+export interface ArenaPillar {
+  x: number; z: number;
+  /** полуширина по X */ r: number;
+  /** полуширина по Z (по умолчанию = r; у стен другая) */ rz?: number;
+  /** block — пилон, obelisk — высокий гранёный, wall — перепона, pyramid — ступенчатая */
+  kind?: ArenaPillarKind;
+}
 export interface ArenaDef {
   /** полуразмер арены в метрах (стены на ±size), чётный, 16..40 */
   size: number;
   /** небо: пекло (как было), закат, открытый день */
   sky: ArenaSky;
-  pillars: { x: number; z: number; r: number }[];
+  pillars: ArenaPillar[];
   torches: { x: number; z: number }[];
   /** печати спавна; меньше двух — арена неиграбельна */
   seals: { x: number; z: number }[];
@@ -70,7 +78,7 @@ export interface ArenaDef {
 }
 
 /** потолки редактора: света на арене конечное число, драйвер скажет спасибо */
-export const ARENA_CAPS = { pillars: 14, torches: 12, seals: 10, pickups: 24 } as const;
+export const ARENA_CAPS = { pillars: 16, torches: 12, seals: 10, pickups: 24 } as const;
 
 export const DEFAULT_ARENA: ArenaDef = {
   size: 26,
@@ -114,32 +122,36 @@ export const BUILTIN_ARENAS: { name: string; def: ArenaDef }[] = [
       size: 38,
       sky: 'day',
       pillars: [
-        { x: 0, z: 0, r: 2.6 },
-        { x: -18, z: -18, r: 1.6 }, { x: -18, z: -6, r: 1.6 }, { x: -18, z: 6, r: 1.6 }, { x: -18, z: 18, r: 1.6 },
-        { x: 18, z: -18, r: 1.6 }, { x: 18, z: -6, r: 1.6 }, { x: 18, z: 6, r: 1.6 }, { x: 18, z: 18, r: 1.6 },
+        // сама пирамида — задник северной стороны, как финал TFE
+        { x: 0, z: -28, r: 8, rz: 8, kind: 'pyramid' },
+        // аллея обелисков к пирамиде + врата у входа
+        { x: -16, z: -12, r: 1.2, rz: 1.2, kind: 'obelisk' }, { x: 16, z: -12, r: 1.2, rz: 1.2, kind: 'obelisk' },
+        { x: -16, z: 0, r: 1.2, rz: 1.2, kind: 'obelisk' }, { x: 16, z: 0, r: 1.2, rz: 1.2, kind: 'obelisk' },
+        { x: -16, z: 12, r: 1.2, rz: 1.2, kind: 'obelisk' }, { x: 16, z: 12, r: 1.2, rz: 1.2, kind: 'obelisk' },
+        { x: -6, z: 22, r: 1.2, rz: 1.2, kind: 'obelisk' }, { x: 6, z: 22, r: 1.2, rz: 1.2, kind: 'obelisk' },
       ],
       torches: [
         { x: -37, z: -20 }, { x: -37, z: 0 }, { x: -37, z: 20 },
         { x: 37, z: -20 }, { x: 37, z: 0 }, { x: 37, z: 20 },
-        { x: -20, z: -37 }, { x: 20, z: -37 }, { x: -20, z: 37 }, { x: 20, z: 37 },
-        { x: 0, z: -37 }, { x: 0, z: 37 },
+        { x: -20, z: 37 }, { x: 20, z: 37 }, { x: 0, z: 37 },
+        { x: -30, z: -37 }, { x: 30, z: -37 }, { x: 0, z: -37 },
       ],
       seals: [
-        { x: 0, z: -32 }, { x: 0, z: 32 }, { x: -32, z: 0 }, { x: 32, z: 0 },
-        { x: -24, z: -24 }, { x: 24, z: -24 }, { x: -24, z: 24 }, { x: 24, z: 24 },
-        { x: -12, z: -32 }, { x: 12, z: -32 },
+        { x: -32, z: -24 }, { x: 32, z: -24 }, { x: -32, z: -4 }, { x: 32, z: -4 },
+        { x: -32, z: 16 }, { x: 32, z: 16 }, { x: -16, z: 32 }, { x: 16, z: 32 },
+        { x: 0, z: -16 },   // прямо у подножия пирамиды — сюрприз в лицо
       ],
       pickups: [
-        { kind: 'bul', x: 12, z: 0 }, { kind: 'bul', x: -12, z: 0 },
-        { kind: 'bul', x: 18, z: -12 }, { kind: 'bul', x: -18, z: 12 },
-        { kind: 'med', x: -33, z: -33 }, { kind: 'med', x: 33, z: 33 },
-        { kind: 'med', x: -33, z: 33 }, { kind: 'med', x: 33, z: -33 },
-        { kind: 'arm', x: 0, z: -20 }, { kind: 'arm', x: 0, z: 20 },
-        { kind: 'box', x: -6, z: -6 }, { kind: 'box', x: 6, z: 6 },
-        { kind: 'shl', x: 18, z: 12 }, { kind: 'shl', x: -18, z: -12 },
-        { kind: 'shl', x: 0, z: 10 }, { kind: 'bul', x: 28, z: 28 },
+        { kind: 'bul', x: 10, z: 4 }, { kind: 'bul', x: -10, z: 4 },
+        { kind: 'bul', x: 22, z: -8 }, { kind: 'bul', x: -22, z: -8 },
+        { kind: 'med', x: -34, z: -34 }, { kind: 'med', x: 34, z: -34 },
+        { kind: 'med', x: -34, z: 34 }, { kind: 'med', x: 34, z: 34 },
+        { kind: 'arm', x: 0, z: 8 }, { kind: 'arm', x: 0, z: -4 },
+        { kind: 'box', x: -10, z: -16 }, { kind: 'box', x: 10, z: -16 },
+        { kind: 'shl', x: 22, z: 8 }, { kind: 'shl', x: -22, z: 8 },
+        { kind: 'shl', x: 0, z: 30 },
       ],
-      start: { x: 0, z: 28 },
+      start: { x: 0, z: 26 },
     },
   },
   {
@@ -150,27 +162,31 @@ export const BUILTIN_ARENAS: { name: string; def: ArenaDef }[] = [
       size: 22,
       sky: 'dusk',
       pillars: [
-        { x: -8, z: -8, r: 1.6 }, { x: 8, z: -8, r: 1.6 }, { x: -8, z: 8, r: 1.6 }, { x: 8, z: 8, r: 1.6 },
-        { x: 0, z: -13, r: 1.6 }, { x: 0, z: 13, r: 1.6 }, { x: -14, z: 0, r: 1.6 }, { x: 14, z: 0, r: 1.6 },
-        { x: -15, z: -15, r: 1.6 }, { x: 15, z: -15, r: 1.6 }, { x: -15, z: 15, r: 1.6 }, { x: 15, z: 15, r: 1.6 },
+        // четыре колонны атриума вокруг меги — сердце Q3DM6
+        { x: -4, z: -4, r: 1.2 }, { x: 4, z: -4, r: 1.2 }, { x: -4, z: 4, r: 1.2 }, { x: 4, z: 4, r: 1.2 },
+        // кольцо стен с проходами по осям и открытыми углами
+        { x: -6.5, z: -10, r: 2.5, rz: 0.7, kind: 'wall' }, { x: 6.5, z: -10, r: 2.5, rz: 0.7, kind: 'wall' },
+        { x: -6.5, z: 10, r: 2.5, rz: 0.7, kind: 'wall' }, { x: 6.5, z: 10, r: 2.5, rz: 0.7, kind: 'wall' },
+        { x: -10, z: -6.5, r: 0.7, rz: 2.5, kind: 'wall' }, { x: -10, z: 6.5, r: 0.7, rz: 2.5, kind: 'wall' },
+        { x: 10, z: -6.5, r: 0.7, rz: 2.5, kind: 'wall' }, { x: 10, z: 6.5, r: 0.7, rz: 2.5, kind: 'wall' },
       ],
       torches: [
-        { x: -21, z: -10 }, { x: -21, z: 10 }, { x: 21, z: -10 }, { x: 21, z: 10 },
-        { x: -10, z: -21 }, { x: 10, z: -21 }, { x: -10, z: 21 }, { x: 10, z: 21 },
+        { x: -21, z: 0 }, { x: 21, z: 0 }, { x: 0, z: -21 }, { x: 0, z: 21 },
+        { x: -21, z: -21 }, { x: 21, z: -21 }, { x: -21, z: 21 }, { x: 21, z: 21 },
       ],
       seals: [
-        { x: -6, z: -18 }, { x: 6, z: 18 }, { x: -19, z: -6 }, { x: 19, z: -6 },
-        { x: -19, z: 6 }, { x: 19, z: 6 },
+        { x: 0, z: -18 }, { x: 0, z: 18 }, { x: -18, z: 0 }, { x: 18, z: 0 },
+        { x: -17, z: -17 }, { x: 17, z: -17 }, { x: -17, z: 17 }, { x: 17, z: 17 },
       ],
       pickups: [
-        { kind: 'bul', x: 4, z: 0 }, { kind: 'bul', x: -4, z: 0 },
-        { kind: 'bul', x: 11, z: -11 }, { kind: 'bul', x: -11, z: 11 },
-        { kind: 'med', x: 0, z: 4 }, { kind: 'med', x: -11, z: -11 }, { kind: 'med', x: 11, z: 11 },
-        { kind: 'arm', x: 0, z: -4 },
-        { kind: 'box', x: -19, z: 0 }, { kind: 'box', x: 19, z: 0 },
-        { kind: 'shl', x: 0, z: -9 }, { kind: 'shl', x: 0, z: 9 },
+        { kind: 'bul', x: 14, z: 0 }, { kind: 'bul', x: -14, z: 0 }, { kind: 'bul', x: 0, z: -14 },
+        // мега в самом центре, между колоннами — брать страшно, как в квейке
+        { kind: 'med', x: 0, z: 0 }, { kind: 'med', x: -13, z: -13 }, { kind: 'med', x: 13, z: 13 },
+        { kind: 'arm', x: -13, z: 13 }, { kind: 'arm', x: 13, z: -13 },
+        { kind: 'box', x: 0, z: -7 }, { kind: 'box', x: 0, z: 7 },
+        { kind: 'shl', x: -7, z: 0 }, { kind: 'shl', x: 7, z: 0 },
       ],
-      start: { x: 0, z: 17 },
+      start: { x: 0, z: 14 },
     },
   },
 ];
@@ -189,11 +205,18 @@ export function validateArena(raw: unknown): ArenaDef | null {
   const out: ArenaDef = { size, sky, pillars: [], torches: [], seals: [], pickups: [], start: { x: 0, z: 14 } };
   const B = size - 2;   // общая граница объектов
 
+  const kinds0: ArenaPillarKind[] = ['block', 'obelisk', 'wall', 'pyramid'];
   for (const it of arr(o.pillars).slice(0, ARENA_CAPS.pillars)) {
     const e = it as Record<string, unknown>;
+    const kind: ArenaPillarKind = kinds0.includes(e.kind as ArenaPillarKind) ? (e.kind as ArenaPillarKind) : 'block';
+    const rMax = kind === 'pyramid' ? 9 : kind === 'wall' ? 8 : 3;
+    const dim = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? Math.max(0.6, Math.min(rMax, v)) : null);
+    const r = dim(e.r);
+    const rz = e.rz === undefined ? r : dim(e.rz);
     const x = num(e.x, B), z = num(e.z, B);
-    const r = typeof e.r === 'number' && Number.isFinite(e.r) ? Math.max(1, Math.min(3, e.r)) : null;
-    if (x !== null && z !== null && r !== null) out.pillars.push({ x, z, r });
+    if (x !== null && z !== null && r !== null && rz !== null) {
+      out.pillars.push(kind === 'block' && r === rz ? { x, z, r } : { x, z, r, rz, kind });
+    }
   }
   for (const it of arr(o.torches).slice(0, ARENA_CAPS.torches)) {
     const e = it as Record<string, unknown>;
