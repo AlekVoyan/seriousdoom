@@ -145,10 +145,33 @@ export const doom: MiniGame3D = {
     // ── АД: красное небо, туман, пол-шахматка, стены, лава, пилоны, факелы ──
     ctx.scene.background = new THREE.Color(0x2a0a08);
     ctx.scene.fog = new THREE.Fog(0x300c08, 22, 80);
+    // ── СОЛНЦЕ (для неба «день»): яркий диск в небе + линзовый флейр в HUD ──
+    const SUN_POS = new THREE.Vector3(-70, 118, -150);   // над пирамидой, в лицо бойцу
+    const sunSprite = (() => {
+      const c = document.createElement('canvas');
+      c.width = 128; c.height = 128;
+      const g2 = c.getContext('2d')!;
+      const grad = g2.createRadialGradient(64, 64, 0, 64, 64, 64);
+      grad.addColorStop(0, 'rgba(255,255,240,1)');
+      grad.addColorStop(0.22, 'rgba(255,244,200,0.9)');
+      grad.addColorStop(0.5, 'rgba(255,224,150,0.32)');
+      grad.addColorStop(1, 'rgba(255,210,120,0)');
+      g2.fillStyle = grad;
+      g2.fillRect(0, 0, 128, 128);
+      const spr = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false, fog: false,
+      }));
+      spr.position.copy(SUN_POS);
+      spr.scale.setScalar(52);
+      spr.visible = false;
+      ctx.scene.add(spr);
+      return spr;
+    })();
+
     /** небо арены: фон, туман и базовый свет; титул всегда адский */
     const applySky = (sky: ArenaDef['sky']) => {
       const cfg = sky === 'day'
-        ? { bg: 0xb08a5e, fog: 0xa87f52, near: 42, far: 170, amb: 0.95, dir: 0.62, fill: 0.12 }
+        ? { bg: 0x6fa8dc, fog: 0x9cc2e0, near: 46, far: 195, amb: 1.0, dir: 0.75, fill: 0.1 }
         : sky === 'dusk'
           ? { bg: 0x542012, fog: 0x4c1e10, near: 30, far: 115, amb: 0.74, dir: 0.42, fill: 0.28 }
           : { bg: 0x2a0a08, fog: 0x300c08, near: 22, far: 80, amb: 0.62, dir: 0.3, fill: 0.4 };
@@ -161,6 +184,7 @@ export const doom: MiniGame3D = {
         else if ((o as THREE.DirectionalLight).isDirectionalLight && o !== hellFill) l.intensity = cfg.dir;
       });
       hellFill.intensity = cfg.fill;
+      sunSprite.visible = sky === 'day';
     };
 
     // ── АРЕНА ──
@@ -221,7 +245,7 @@ export const doom: MiniGame3D = {
     let ARENA = A.size;   // полуразмер: обновляется при пересборке арены
 
     // всё строится в buildArenaLive: размер арены теперь часть ArenaDef
-    interface Pillar { x: number; z: number; r: number; rz: number; kind: 'block' | 'obelisk' | 'wall' | 'pyramid' }
+    interface Pillar { x: number; z: number; r: number; rz: number; kind: 'block' | 'obelisk' | 'wall' | 'pyramid' | 'rubble' }
     interface Torch { light: THREE.PointLight; flame: THREE.Mesh; ph: number }
     let pillars: Pillar[] = [];
     let torches: Torch[] = [];
@@ -236,10 +260,23 @@ export const doom: MiniGame3D = {
       const varG = new THREE.Group();
       // пол-шахматка и стены — размер из def (дробный шаг цикла покрывает любой чётный размер)
       const TS = 4;
+      const ground = def.ground ?? 'checker';
+      // песок: оттенки выбираются детерминированно от клетки — пересборка
+      // редактора не «переливает» пустыню заново
+      const SAND = [0xc4a26c, 0xb8965e, 0xcfae78, 0xbd9c66, 0xd4b582];
+      const ROAD = [0x8f7f62, 0x9a8a6c];
       for (let ix = -ARENA / TS; ix < ARENA / TS; ix++) {
         for (let iz = -ARENA / TS; iz < ARENA / TS; iz++) {
-          const t = box(TS - 0.06, 0.3, TS - 0.06, (ix + iz) % 2 ? C_FLOOR_A : C_FLOOR_B);
-          t.position.set(ix * TS + TS / 2, -0.15, iz * TS + TS / 2);
+          const cx = ix * TS + TS / 2;
+          let col: number;
+          if (ground === 'checker') col = (ix + iz) % 2 ? C_FLOOR_A : C_FLOOR_B;
+          else if (ground === 'sand_road' && Math.abs(cx) < TS) col = ROAD[(((ix + iz) % 2) + 2) % 2];
+          else {
+            const h = Math.abs((ix * 73856093) ^ (iz * 19349663));
+            col = SAND[h % SAND.length];
+          }
+          const t = box(TS - 0.06, 0.3, TS - 0.06, col);
+          t.position.set(cx, -0.15, iz * TS + TS / 2);
           varG.add(t);
         }
       }
@@ -285,6 +322,31 @@ export const doom: MiniGame3D = {
           const w = box(p.r * 2, 4.2, p.rz * 2, C_WALL); w.position.set(p.x, 2.1, p.z); varG.add(w);
           const t = box(p.r * 2 + 0.3, 0.5, p.rz * 2 + 0.3, C_WALL_TRIM); t.position.set(p.x, 4.35, p.z); varG.add(t);
           const bqs = box(p.r * 2 + 0.4, 0.4, p.rz * 2 + 0.4, C_WALL_TRIM); bqs.position.set(p.x, 0.2, p.z); varG.add(bqs);
+        } else if (p.kind === 'rubble') {
+          // завал: груда каменных обломков, непроходимая, но невысокая —
+          // видно, что «дальше был проход, но он обрушен»
+          const CH = [C_PILLAR, C_WALL_TRIM, 0x6a5a4c, C_WALL];
+          let hsh = Math.abs(Math.round(p.x * 31 + p.z * 17)) + 7;
+          const rnd = () => { hsh = (hsh * 1103515245 + 12345) & 0x7fffffff; return hsh / 0x7fffffff; };
+          const n = 9 + Math.floor(rnd() * 4);
+          for (let i = 0; i < n; i++) {
+            const w = 0.7 + rnd() * (p.r * 0.6);
+            const d = 0.6 + rnd() * (p.rz * 1.2);
+            const h = 0.5 + rnd() * 1.6;
+            const chunk = box(w, h, d, CH[Math.floor(rnd() * CH.length)]);
+            chunk.position.set(
+              p.x + (rnd() - 0.5) * (p.r * 2 - w),
+              h / 2 - 0.06 + rnd() * 0.3,
+              p.z + (rnd() - 0.5) * (p.rz * 2 - d),
+            );
+            chunk.rotation.y = (rnd() - 0.5) * 0.6;
+            varG.add(chunk);
+          }
+          // пара крупных глыб сверху — силуэт холма
+          const big = box(p.r * 0.9, 1.4, p.rz * 1.1, C_PILLAR);
+          big.position.set(p.x, 1.5, p.z);
+          big.rotation.y = 0.2;
+          varG.add(big);
         } else if (p.kind === 'pyramid') {
           // ступенчатая пирамида: пять ярусов от полного следа к вершине
           const tiers = 5;
@@ -744,7 +806,13 @@ export const doom: MiniGame3D = {
         const mD = /^Digit(\d)$/.exec(e.code);
         if (mD) { eSlot = mD[1] === '0' ? 9 : Number(mD[1]) - 1; return; }
         if (e.code === 'KeyX') { eClickR = true; return; }
-        if (e.code === 'KeyT') { eRot = !eRot; eSay(eRot ? 'СТЕНА: ВДОЛЬ Z' : 'СТЕНА: ВДОЛЬ X'); return; }
+        if (e.code === 'KeyT') { eRot = !eRot; eSay(eRot ? 'СТЕНА/РАЗВАЛ: ВДОЛЬ Z' : 'СТЕНА/РАЗВАЛ: ВДОЛЬ X'); return; }
+        if (e.code === 'KeyF') {
+          eDef.ground = eDef.ground === 'sand' ? 'sand_road' : eDef.ground === 'sand_road' ? 'checker' : 'sand';
+          rebuildEditor();
+          eSay(`ПОЛ: ${eDef.ground === 'checker' ? 'ШАХМАТКА' : eDef.ground === 'sand' ? 'ПЕСОК' : 'ПЕСОК + ДОРОГА'}`);
+          return;
+        }
         if (e.code === 'KeyG') { testPlayFromEditor(); return; }
         if (e.code === 'KeyQ') { exitEditorToTitle(); return; }
         if (e.code === 'KeyE') {
@@ -1099,13 +1167,14 @@ export const doom: MiniGame3D = {
       name: string; r: number; rz?: number; h: number;
       kind: 'pillar' | 'torch' | 'seal' | 'start' | 'med' | 'arm' | 'bul' | 'shl' | 'box';
       /** тип структуры для kind=pillar */
-      pk?: 'block' | 'obelisk' | 'wall' | 'pyramid';
+      pk?: 'block' | 'obelisk' | 'wall' | 'pyramid' | 'rubble';
     }
     const E_SLOTS: ESlot[] = [
       { name: 'ПИЛОН', r: 1.6, h: 5, kind: 'pillar', pk: 'block' },
       { name: 'ПИЛОН+', r: 2.2, h: 5, kind: 'pillar', pk: 'block' },
       { name: 'ОБЕЛИСК', r: 1.2, h: 11.5, kind: 'pillar', pk: 'obelisk' },
       { name: 'СТЕНА', r: 2.5, rz: 0.7, h: 4.4, kind: 'pillar', pk: 'wall' },
+      { name: 'РАЗВАЛ', r: 3, rz: 1.6, h: 2.4, kind: 'pillar', pk: 'rubble' },
       { name: 'ПИРАМИДА', r: 6, h: 9, kind: 'pillar', pk: 'pyramid' },
       { name: 'ФАКЕЛ', r: 0.6, h: 3.9, kind: 'torch' },
       { name: 'ПЕЧАТЬ', r: 2.0, h: 0.3, kind: 'seal' },
@@ -1119,7 +1188,7 @@ export const doom: MiniGame3D = {
     let eRot = false;   // T: стена вдоль X ↔ вдоль Z
     const slotDims = (sl: ESlot): { rx: number; rz: number } => {
       const rz = sl.rz ?? sl.r;
-      return eRot && sl.pk === 'wall' ? { rx: rz, rz: sl.r } : { rx: sl.r, rz };
+      return eRot && (sl.pk === 'wall' || sl.pk === 'rubble') ? { rx: rz, rz: sl.r } : { rx: sl.r, rz };
     };
     let eDef: ArenaDef = structuredClone(A);
     let eSlot = 0;
@@ -1556,6 +1625,7 @@ export const doom: MiniGame3D = {
     /** HUD редактора: заголовок, счётчики, хотбар, подсказки */
     const drawEditorHud = () => {
       const W = ctx.width, H = ctx.height;
+      drawSunFlare();
       // прицел
       g.strokeStyle = 'rgba(232,200,64,0.85)'; g.lineWidth = 2;
       g.beginPath();
@@ -1576,7 +1646,8 @@ export const doom: MiniGame3D = {
       g.fillText(
         `пилоны ${c.pillars}/${ARENA_CAPS.pillars} · факелы ${c.torches}/${ARENA_CAPS.torches}` +
         ` · печати ${c.seals}/${ARENA_CAPS.seals} · предметы ${c.pickups}/${ARENA_CAPS.pickups}` +
-        ` · размер ${eDef.size * 2}×${eDef.size * 2} · небо: ${eDef.sky === 'hell' ? 'ПЕКЛО' : eDef.sky === 'dusk' ? 'ЗАКАТ' : 'ДЕНЬ'}`,
+        ` · размер ${eDef.size * 2}×${eDef.size * 2} · небо: ${eDef.sky === 'hell' ? 'ПЕКЛО' : eDef.sky === 'dusk' ? 'ЗАКАТ' : 'ДЕНЬ'}` +
+        ` · пол: ${(eDef.ground ?? 'checker') === 'checker' ? 'ШАХМАТКА' : eDef.ground === 'sand' ? 'ПЕСОК' : 'ПЕСОК+ДОРОГА'}`,
         14, 48,
       );
       if (c.seals < 2) {
@@ -1610,8 +1681,8 @@ export const doom: MiniGame3D = {
       g.font = '11px ui-monospace, monospace';
       g.fillStyle = '#7a5a50';
       g.fillText(
-        'ЛКМ поставить · ПКМ/X убрать · 0-9/колесо слот · T поворот стены · WASD+SPACE/SHIFT полёт (R быстрее) · −/+ размер' +
-        ' · B небо · G тест · Q титул · K сохранить как · L загрузить · N базовая · E/I экспорт/импорт',
+        'ЛКМ поставить · ПКМ/X убрать · 0-9/колесо слот · T поворот · WASD+SPACE/SHIFT полёт (R быстрее) · −/+ размер' +
+        ' · B небо · F пол · G тест · Q титул · K сохранить · L загрузить · N базовая · E/I экспорт/импорт',
         W / 2, y0 - 10,
       );
       if (eMsgT > 0) {
@@ -1620,6 +1691,41 @@ export const doom: MiniGame3D = {
         g.fillText(eMsg, W / 2, H * 0.3);
       }
       g.textAlign = 'left';
+    };
+
+    /** сэмовский линзовый флейр: сияние на солнце + блики к центру экрана */
+    const sunScreen = new THREE.Vector3();
+    const drawSunFlare = () => {
+      const sky = phase === 'edit' ? eDef.sky : A.sky;
+      if (sky !== 'day') return;
+      sunScreen.copy(SUN_POS).project(cam);
+      if (sunScreen.z > 1) return;                       // солнце за спиной
+      const W = ctx.width, H = ctx.height;
+      const sx = (sunScreen.x * 0.5 + 0.5) * W;
+      const sy = (-sunScreen.y * 0.5 + 0.5) * H;
+      if (sx < -W * 0.3 || sx > W * 1.3 || sy < -H * 0.3 || sy > H * 1.3) return;
+      // чем ближе к центру взгляда, тем ярче — как в сэме, когда смотришь на солнце
+      const dcx = (sx - W / 2) / W, dcy = (sy - H / 2) / H;
+      const k = Math.max(0, 1 - Math.hypot(dcx, dcy) * 1.7);
+      if (k <= 0.02) return;
+      g.save();
+      g.globalCompositeOperation = 'lighter';
+      const glow = g.createRadialGradient(sx, sy, 0, sx, sy, 140 + k * 160);
+      glow.addColorStop(0, `rgba(255,246,214,${(0.5 + k * 0.4).toFixed(3)})`);
+      glow.addColorStop(0.35, `rgba(255,226,150,${(0.2 + k * 0.25).toFixed(3)})`);
+      glow.addColorStop(1, 'rgba(255,210,120,0)');
+      g.fillStyle = glow;
+      g.fillRect(sx - 320, sy - 320, 640, 640);
+      // цепочка бликов вдоль линии солнце → центр
+      for (const [t, r, a] of [[0.35, 14, 0.35], [0.62, 8, 0.3], [0.95, 22, 0.22], [1.3, 11, 0.26]] as const) {
+        const bx = sx + (W / 2 - sx) * t, by = sy + (H / 2 - sy) * t;
+        const bl = g.createRadialGradient(bx, by, 0, bx, by, r * (1 + k));
+        bl.addColorStop(0, `rgba(255,235,180,${(a * k).toFixed(3)})`);
+        bl.addColorStop(1, 'rgba(255,220,150,0)');
+        g.fillStyle = bl;
+        g.fillRect(bx - r * 2.4, by - r * 2.4, r * 4.8, r * 4.8);
+      }
+      g.restore();
     };
 
     const drawHud = () => {
@@ -1738,6 +1844,8 @@ export const doom: MiniGame3D = {
       }
 
       if (showPerf) drawPerf();
+
+      drawSunFlare();
 
       // ── прицел ──
       if (phase === 'wave' || phase === 'clear') {
@@ -2556,6 +2664,7 @@ export const doom: MiniGame3D = {
       dust.commit(puffs.length);
 
       if (launcherMsg > 0) launcherMsg -= dt;
+
 
       // ── лицо: зыркает по сторонам ──
       faceLookT -= dt;

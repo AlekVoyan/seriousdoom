@@ -56,7 +56,8 @@ export const ROCKET = { splash: 70, radius: 5.5, self: 0.35, speed: 24, life: 3.
 
 export type ArenaPickupKind = 'med' | 'arm' | 'bul' | 'shl' | 'box';
 export type ArenaSky = 'hell' | 'dusk' | 'day';
-export type ArenaPillarKind = 'block' | 'obelisk' | 'wall' | 'pyramid';
+export type ArenaPillarKind = 'block' | 'obelisk' | 'wall' | 'pyramid' | 'rubble';
+export type ArenaGround = 'checker' | 'sand' | 'sand_road';
 export interface ArenaPillar {
   x: number; z: number;
   /** полуширина по X */ r: number;
@@ -69,6 +70,8 @@ export interface ArenaDef {
   size: number;
   /** небо: пекло (как было), закат, открытый день */
   sky: ArenaSky;
+  /** пол: адская шахматка, пустынный песок, песок с мощёной дорогой по оси Z */
+  ground?: ArenaGround;
   pillars: ArenaPillar[];
   torches: { x: number; z: number }[];
   /** печати спавна; меньше двух — арена неиграбельна */
@@ -121,72 +124,76 @@ export const BUILTIN_ARENAS: { name: string; def: ArenaDef }[] = [
     def: {
       size: 38,
       sky: 'day',
+      ground: 'sand_road',
       pillars: [
-        // сама пирамида — задник северной стороны, как финал TFE
-        { x: 0, z: -28, r: 8, rz: 8, kind: 'pyramid' },
-        // аллея обелисков к пирамиде + врата у входа
-        { x: -16, z: -12, r: 1.2, rz: 1.2, kind: 'obelisk' }, { x: 16, z: -12, r: 1.2, rz: 1.2, kind: 'obelisk' },
-        { x: -16, z: 0, r: 1.2, rz: 1.2, kind: 'obelisk' }, { x: 16, z: 0, r: 1.2, rz: 1.2, kind: 'obelisk' },
-        { x: -16, z: 12, r: 1.2, rz: 1.2, kind: 'obelisk' }, { x: 16, z: 12, r: 1.2, rz: 1.2, kind: 'obelisk' },
-        { x: -6, z: 22, r: 1.2, rz: 1.2, kind: 'obelisk' }, { x: 6, z: 22, r: 1.2, rz: 1.2, kind: 'obelisk' },
+        // пирамида — весь северный горизонт; равнина ПУСТАЯ, как в TFE:
+        // негде прятаться, спасает только движение
+        { x: 0, z: -27, r: 9, rz: 9, kind: 'pyramid' },
+        { x: -6, z: 24, r: 1.2, rz: 1.2, kind: 'obelisk' }, { x: 6, z: 24, r: 1.2, rz: 1.2, kind: 'obelisk' },
+        // редкие руины по краям — не укрытия, а ориентиры
+        { x: -30, z: -10, r: 1.2, rz: 1.2, kind: 'obelisk' }, { x: 30, z: -10, r: 1.2, rz: 1.2, kind: 'obelisk' },
+        { x: -28, z: 12, r: 1.2, rz: 1.2, kind: 'obelisk' }, { x: 28, z: 12, r: 1.2, rz: 1.2, kind: 'obelisk' },
       ],
       torches: [
-        { x: -37, z: -20 }, { x: -37, z: 0 }, { x: -37, z: 20 },
-        { x: 37, z: -20 }, { x: 37, z: 0 }, { x: 37, z: 20 },
-        { x: -20, z: 37 }, { x: 20, z: 37 }, { x: 0, z: 37 },
-        { x: -30, z: -37 }, { x: 30, z: -37 }, { x: 0, z: -37 },
+        { x: -37, z: -24 }, { x: -37, z: 0 }, { x: -37, z: 24 },
+        { x: 37, z: -24 }, { x: 37, z: 0 }, { x: 37, z: 24 },
+        { x: -20, z: 37 }, { x: 20, z: 37 }, { x: 0, z: -37 },
       ],
       seals: [
-        { x: -32, z: -24 }, { x: 32, z: -24 }, { x: -32, z: -4 }, { x: 32, z: -4 },
-        { x: -32, z: 16 }, { x: 32, z: 16 }, { x: -16, z: 32 }, { x: 16, z: 32 },
-        { x: 0, z: -16 },   // прямо у подножия пирамиды — сюрприз в лицо
+        { x: -32, z: -26 }, { x: 32, z: -26 }, { x: -33, z: -2 }, { x: 33, z: -2 },
+        { x: -32, z: 20 }, { x: 32, z: 20 }, { x: -16, z: 33 }, { x: 16, z: 33 },
+        { x: 0, z: -14 },   // у подножия пирамиды, прямо на дороге
+        { x: 20, z: -30 },
       ],
       pickups: [
-        { kind: 'bul', x: 10, z: 4 }, { kind: 'bul', x: -10, z: 4 },
-        { kind: 'bul', x: 22, z: -8 }, { kind: 'bul', x: -22, z: -8 },
+        { kind: 'bul', x: 8, z: 6 }, { kind: 'bul', x: -8, z: 6 },
+        { kind: 'bul', x: 24, z: -10 }, { kind: 'bul', x: -24, z: -10 },
         { kind: 'med', x: -34, z: -34 }, { kind: 'med', x: 34, z: -34 },
         { kind: 'med', x: -34, z: 34 }, { kind: 'med', x: 34, z: 34 },
-        { kind: 'arm', x: 0, z: 8 }, { kind: 'arm', x: 0, z: -4 },
-        { kind: 'box', x: -10, z: -16 }, { kind: 'box', x: 10, z: -16 },
-        { kind: 'shl', x: 22, z: 8 }, { kind: 'shl', x: -22, z: 8 },
-        { kind: 'shl', x: 0, z: 30 },
+        { kind: 'arm', x: 0, z: 4 }, { kind: 'arm', x: 0, z: -6 },
+        { kind: 'box', x: -12, z: -20 }, { kind: 'box', x: 12, z: -20 },
+        { kind: 'shl', x: 20, z: 4 }, { kind: 'shl', x: -20, z: 4 },
+        { kind: 'shl', x: 0, z: 32 },
       ],
-      start: { x: 0, z: 26 },
+      start: { x: 0, z: 30 },
     },
   },
   {
-    // Оммаж Campgrounds (Q3DM6) из Quake 3: тесные дворики, колонны, мегааптечка
-    // в центре, которую страшно брать. Сумеречное небо.
-    name: 'КЕМПГРАУНД',
+    // Оммаж Q3DM1 «Arena Gate» из Quake 3: двор с ракетницей в центре и двумя
+    // пилонами по бокам, фасад адского собора на севере — но центральный
+    // проход внутрь ОБРУШЕН: за завалом та часть арены «закрыта».
+    name: 'АРЕНА-ГЕЙТ',
     def: {
-      size: 22,
-      sky: 'dusk',
+      size: 24,
+      sky: 'hell',
       pillars: [
-        // четыре колонны атриума вокруг меги — сердце Q3DM6
-        { x: -4, z: -4, r: 1.2 }, { x: 4, z: -4, r: 1.2 }, { x: -4, z: 4, r: 1.2 }, { x: 4, z: 4, r: 1.2 },
-        // кольцо стен с проходами по осям и открытыми углами
-        { x: -6.5, z: -10, r: 2.5, rz: 0.7, kind: 'wall' }, { x: 6.5, z: -10, r: 2.5, rz: 0.7, kind: 'wall' },
-        { x: -6.5, z: 10, r: 2.5, rz: 0.7, kind: 'wall' }, { x: 6.5, z: 10, r: 2.5, rz: 0.7, kind: 'wall' },
-        { x: -10, z: -6.5, r: 0.7, rz: 2.5, kind: 'wall' }, { x: -10, z: 6.5, r: 0.7, rz: 2.5, kind: 'wall' },
-        { x: 10, z: -6.5, r: 0.7, rz: 2.5, kind: 'wall' }, { x: 10, z: 6.5, r: 0.7, rz: 2.5, kind: 'wall' },
+        // фасад собора: две стены и заваленный проход между ними
+        { x: -13.5, z: -14, r: 7.5, rz: 1.0, kind: 'wall' }, { x: 13.5, z: -14, r: 7.5, rz: 1.0, kind: 'wall' },
+        { x: 0, z: -14, r: 6, rz: 1.6, kind: 'rubble' },
+        // крылья фасада уходят к боковым стенам
+        { x: -22, z: -9, r: 1.0, rz: 4.0, kind: 'wall' }, { x: 22, z: -9, r: 1.0, rz: 4.0, kind: 'wall' },
+        // два пилона двора — «лестницы» по бокам ракетницы, как в q3dm1
+        { x: -9, z: 2, r: 1.8, rz: 1.8 }, { x: 9, z: 2, r: 1.8, rz: 1.8 },
       ],
       torches: [
-        { x: -21, z: 0 }, { x: 21, z: 0 }, { x: 0, z: -21 }, { x: 0, z: 21 },
-        { x: -21, z: -21 }, { x: 21, z: -21 }, { x: -21, z: 21 }, { x: 21, z: 21 },
+        { x: -8.5, z: -11.5 }, { x: 8.5, z: -11.5 },
+        { x: -21, z: 10 }, { x: 21, z: 10 }, { x: -10, z: 21 }, { x: 10, z: 21 },
       ],
       seals: [
-        { x: 0, z: -18 }, { x: 0, z: 18 }, { x: -18, z: 0 }, { x: 18, z: 0 },
-        { x: -17, z: -17 }, { x: 17, z: -17 }, { x: -17, z: 17 }, { x: 17, z: 17 },
+        { x: 0, z: 18 }, { x: -18, z: 14 }, { x: 18, z: 14 },
+        { x: -19, z: -2 }, { x: 19, z: -2 }, { x: 0, z: 8 },
       ],
       pickups: [
-        { kind: 'bul', x: 14, z: 0 }, { kind: 'bul', x: -14, z: 0 }, { kind: 'bul', x: 0, z: -14 },
-        // мега в самом центре, между колоннами — брать страшно, как в квейке
-        { kind: 'med', x: 0, z: 0 }, { kind: 'med', x: -13, z: -13 }, { kind: 'med', x: 13, z: 13 },
-        { kind: 'arm', x: -13, z: 13 }, { kind: 'arm', x: 13, z: -13 },
-        { kind: 'box', x: 0, z: -7 }, { kind: 'box', x: 0, z: 7 },
-        { kind: 'shl', x: -7, z: 0 }, { kind: 'shl', x: 7, z: 0 },
+        // «ракетница» двора: первая обойма лежит ровно в центре, как RL в q3dm1
+        { kind: 'bul', x: 0, z: -2 },
+        { kind: 'bul', x: -14, z: 6 }, { kind: 'bul', x: 14, z: 6 },
+        { kind: 'med', x: -9, z: -2 }, { kind: 'med', x: 9, z: -2 },
+        { kind: 'arm', x: -9, z: 6 }, { kind: 'arm', x: 9, z: 6 },
+        { kind: 'box', x: 0, z: -8 },
+        { kind: 'shl', x: -16, z: -8 }, { kind: 'shl', x: 16, z: -8 },
+        { kind: 'med', x: 0, z: 14 },
       ],
-      start: { x: 0, z: 14 },
+      start: { x: 0, z: 12 },
     },
   },
 ];
@@ -202,14 +209,15 @@ export function validateArena(raw: unknown): ArenaDef | null {
     ? Math.max(16, Math.min(40, Math.round(o.size / 2) * 2))
     : 26;
   const sky: ArenaSky = o.sky === 'day' || o.sky === 'dusk' ? o.sky : 'hell';
-  const out: ArenaDef = { size, sky, pillars: [], torches: [], seals: [], pickups: [], start: { x: 0, z: 14 } };
+  const ground: ArenaGround = o.ground === 'sand' || o.ground === 'sand_road' ? o.ground : 'checker';
+  const out: ArenaDef = { size, sky, ground, pillars: [], torches: [], seals: [], pickups: [], start: { x: 0, z: 14 } };
   const B = size - 2;   // общая граница объектов
 
   const kinds0: ArenaPillarKind[] = ['block', 'obelisk', 'wall', 'pyramid'];
   for (const it of arr(o.pillars).slice(0, ARENA_CAPS.pillars)) {
     const e = it as Record<string, unknown>;
     const kind: ArenaPillarKind = kinds0.includes(e.kind as ArenaPillarKind) ? (e.kind as ArenaPillarKind) : 'block';
-    const rMax = kind === 'pyramid' ? 9 : kind === 'wall' ? 8 : 3;
+    const rMax = kind === 'pyramid' ? 9 : kind === 'wall' ? 8 : kind === 'rubble' ? 6 : 3;
     const dim = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? Math.max(0.6, Math.min(rMax, v)) : null);
     const r = dim(e.r);
     const rz = e.rz === undefined ? r : dim(e.rz);
