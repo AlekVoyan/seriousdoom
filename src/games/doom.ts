@@ -379,7 +379,12 @@ export const doom: MiniGame3D = {
     let hp = 100, armor = 0;
     const ammo = { bul: 60, shl: 0 };
     let fireCd = 0, bob = 0, kick = 0, flashT = 0, flashCol = 0;
-    let wave = 0, money = 0, kills = 0, totalKills = 0;
+    // отладка: ?wave=20 стартует сразу с двадцатой, ?perf=1 включает счётчик
+    const qs = new URLSearchParams(location.search);
+    const startWaveAt = Math.max(1, Math.min(99, Number(qs.get('wave')) || 1));
+    let showPerf = qs.get('perf') === '1';
+    // startWave() делает wave++, поэтому держим на единицу меньше
+    let wave = startWaveAt - 1, money = 0, kills = 0, totalKills = 0;
     type Phase = 'title' | 'wave' | 'clear' | 'dead';
     let phase: Phase = 'title';
     let phaseT = 0, time = 0;
@@ -506,6 +511,7 @@ export const doom: MiniGame3D = {
     let mDX = 0, mDY = 0, mouseDown = false, locked = false;
     const onKeyDown = (e: KeyboardEvent) => {
       keys.add(e.code);
+      if (e.code === 'F3') { showPerf = !showPerf; e.preventDefault(); }
       if (e.code === 'Digit1' && owned[0]) { weapon = 0; buildGun(0); sfx.play('weaponSwitch'); }
       if (e.code === 'Digit2' && owned[1]) { weapon = 1; buildGun(1); sfx.play('weaponSwitch'); }
       if (e.code === 'Digit3' && owned[2]) { weapon = 2; buildGun(2); sfx.play('weaponSwitch'); }
@@ -657,7 +663,7 @@ export const doom: MiniGame3D = {
       for (const p of portals) p.release(0.25);
       hp = 100; armor = 0; ammo.bul = 60; ammo.shl = 0;
       owned[1] = false; owned[2] = false; weapon = 0; buildGun(0);
-      px = 0; pz = 14; yaw = 0; wave = 0;
+      px = 0; pz = 14; yaw = 0; wave = startWaveAt - 1;
       resetPickups();
       music.play('main', { fade: 0.8 });
       startWave();
@@ -774,6 +780,47 @@ export const doom: MiniGame3D = {
       return bh;
     };
 
+    /** Встроенный счётчик (F3 или ?perf=1). Показывает, КУДА уходит кадр:
+     *  логика, отрисовка, сколько вызовов и сколько живых объектов. */
+    const drawPerf = () => {
+      const p = ctx.perf;
+      const rows: [string, string, boolean][] = [
+        ['кадр', `${p.frame.toFixed(1)} мс  (${p.frame > 0 ? Math.round(1000 / p.frame) : 0} fps)`, p.frame > 20],
+        ['пик за сек', `${p.spike.toFixed(1)} мс`, p.spike > 33],
+        ['логика', `${p.update.toFixed(2)} мс`, p.update > 6],
+        ['отрисовка', `${p.render.toFixed(2)} мс`, p.render > 6],
+        ['вызовов', `${p.calls}`, p.calls > 900],
+        ['треугольников', `${(p.tris / 1000).toFixed(0)}k`, false],
+        ['программ', `${p.programs}`, false],
+        ['геометрий', `${p.geometries}`, p.geometries > 900],
+        ['—', '', false],
+        ['твари / в пути', `${mons.length} / ${pending.length}`, false],
+        ['куски', `${gibs.length}/${GIB_MAX}`, gibs.length >= GIB_MAX],
+        ['пыль', `${puffs.length}/${PUFF_MAX}`, puffs.length >= PUFF_MAX],
+        ['файерболы', `${balls.length}/${BALL_MAX}`, false],
+        ['волна / бюджет', `${wave} / ${waveBudget}`, false],
+      ];
+      const pad = 8, lh = 15, w = 208;
+      const h = rows.length * lh + pad * 2;
+      const x = 10, y = 100;
+      g.fillStyle = 'rgba(8,4,4,0.82)';
+      g.fillRect(x, y, w, h);
+      g.strokeStyle = '#4a2c26'; g.lineWidth = 1;
+      g.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+      g.font = '11px ui-monospace, monospace';
+      g.textAlign = 'left';
+      rows.forEach(([k, v, bad], i) => {
+        const yy = y + pad + i * lh + 11;
+        if (k === '—') { g.strokeStyle = '#4a2c26'; g.beginPath(); g.moveTo(x + pad, yy - 5); g.lineTo(x + w - pad, yy - 5); g.stroke(); return; }
+        g.fillStyle = '#a07a6a';
+        g.fillText(k, x + pad, yy);
+        g.fillStyle = bad ? '#ff5a3a' : '#e8dcd4';
+        g.textAlign = 'right';
+        g.fillText(v, x + w - pad, yy);
+        g.textAlign = 'left';
+      });
+    };
+
     const drawHud = () => {
       const W = ctx.width, H = ctx.height;
 
@@ -822,6 +869,8 @@ export const doom: MiniGame3D = {
         g.textAlign = 'left';
         return;
       }
+
+      if (showPerf) drawPerf();
 
       // ── прицел ──
       if (phase === 'wave' || phase === 'clear') {

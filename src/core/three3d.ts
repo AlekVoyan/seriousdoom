@@ -10,6 +10,15 @@ import { asset } from './assets';
  * Контракт тот же: start(ctx, opts) → ctx.finish({success, score}).
  */
 
+/** Замер кадра для встроенного счётчика (F3). Заполняет рантайм. */
+export interface FramePerf {
+  /** полный кадр, мс (сглажено) */ frame: number;
+  /** пик кадра за последнюю секунду */ spike: number;
+  /** логика игры, мс */ update: number;
+  /** renderer.render, мс */ render: number;
+  calls: number; tris: number; programs: number; geometries: number; textures: number;
+}
+
 export interface MiniGame3DContext {
   scene: THREE.Scene;
   camera: THREE.OrthographicCamera;
@@ -18,6 +27,8 @@ export interface MiniGame3DContext {
   readonly width: number;
   readonly height: number;
   readonly input: InputState;
+  /** показания прошлого кадра — для встроенного счётчика производительности */
+  readonly perf: FramePerf;
   onFrame(cb: (dt: number) => void): void;
   finish(result: MiniGameResult): void;
 }
@@ -300,6 +311,10 @@ export function runMiniGame3D(game: MiniGame3D, opts: MiniGameOpts = {}): Promis
     let frameCb: ((dt: number) => void) | null = null;
     let done = false;
 
+    // ── замер кадра ──
+    const perf: FramePerf = { frame: 0, spike: 0, update: 0, render: 0, calls: 0, tris: 0, programs: 0, geometries: 0, textures: 0 };
+    let spikeAcc = 0, spikeT = 0, prevT = 0;
+
     const finish = (result: MiniGameResult) => {
       if (done) return;
       done = true;
@@ -327,6 +342,7 @@ export function runMiniGame3D(game: MiniGame3D, opts: MiniGameOpts = {}): Promis
         return height;
       },
       input: input.state,
+      perf,
       onFrame(cb) {
         frameCb = cb;
       },
@@ -337,9 +353,28 @@ export function runMiniGame3D(game: MiniGame3D, opts: MiniGameOpts = {}): Promis
       raf = requestAnimationFrame(loop);
       const dt = last ? Math.min((t - last) / 1000, 0.05) : 0;
       last = t;
+
+      // сколько заняло всё от прошлого кадра до этого — включая простой браузера
+      const wall = prevT ? t - prevT : 0;
+      prevT = t;
+      perf.frame += (wall - perf.frame) * 0.1;              // сглаживание
+      spikeAcc = Math.max(spikeAcc, wall);
+      spikeT += dt;
+      if (spikeT >= 1) { perf.spike = spikeAcc; spikeAcc = 0; spikeT = 0; }
+
+      const t0 = performance.now();
       hud.clearRect(0, 0, width, height);
       if (frameCb) frameCb(dt);
+      const t1 = performance.now();
       renderer.render(scene, camera);
+      const t2 = performance.now();
+      perf.update += (t1 - t0 - perf.update) * 0.1;
+      perf.render += (t2 - t1 - perf.render) * 0.1;
+      perf.calls = renderer.info.render.calls;
+      perf.tris = renderer.info.render.triangles;
+      perf.programs = renderer.info.programs?.length ?? 0;
+      perf.geometries = renderer.info.memory.geometries;
+      perf.textures = renderer.info.memory.textures;
       input.endFrame();
     };
 

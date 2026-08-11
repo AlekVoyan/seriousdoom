@@ -1,0 +1,158 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>wave20</title>
+<style>body{background:#111;color:#ddd;font:13px ui-monospace,monospace;padding:16px}
+pre{white-space:pre-wrap}canvas{display:none}.hi{color:#ff5a3a}.ok{color:#7bd88f}</style></head>
+<body><pre id="out">меряю…</pre><canvas id="c"></canvas>
+<script type="module">
+import * as THREE from 'three';
+import { buildMonster, createPentagram, createEmberCloud, createDustCloud, buildProp } from '/src/games/doomModels.ts';
+import { box } from '/src/core/three3d.ts';
+
+const out = document.getElementById('out');
+const log = (s) => { out.textContent += '\n' + s; };
+const hi = (s) => { out.innerHTML += `\n<span class="hi">${s}</span>`; };
+out.textContent = '';
+
+const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: true });
+renderer.setSize(1280, 800, false);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x2a0a08);
+scene.fog = new THREE.Fog(0x300c08, 22, 80);
+const cam = new THREE.PerspectiveCamera(78, 1.6, 0.1, 220);
+cam.position.set(0, 1.7, 14);
+
+// ── арена как в игре ──
+const ARENA = 26;
+scene.add(new THREE.AmbientLight(0xffffff, 0.62));
+scene.add(new THREE.DirectionalLight(0xffffff, 0.3));
+scene.add(new THREE.DirectionalLight(0x9a6aff, 0.4));
+for (let ix = -ARENA; ix < ARENA; ix += 4) for (let iz = -ARENA; iz < ARENA; iz += 4) {
+  const t = box(4, 0.3, 4, ((ix + iz) / 4) % 2 ? 0x3a3230 : 0x2e2624);
+  t.position.set(ix + 2, -0.15, iz + 2); scene.add(t);
+}
+for (const [px, pz, r] of [[-11,-11,1.6],[11,-11,1.6],[-11,11,1.6],[11,11,1.6],[0,0,2.2]]) {
+  const col = box(r*2, 5, r*2, 0x5a4a44); col.position.set(px, 2.5, pz); scene.add(col);
+}
+const TP = [[-25,-14],[-25,0],[-25,14],[25,-14],[25,0],[25,14],[-14,-25],[14,-25],[-14,25],[14,25]];
+for (const [tx, tz] of TP) {
+  const l = new THREE.PointLight(0xffa040, 1.2, 16, 1.6); l.position.set(tx, 2.4, tz); scene.add(l);
+  const f = buildProp('torch'); f.position.set(tx, 0, tz); scene.add(f);
+}
+const SPAWNS = [[0,-22],[0,22],[-22,0],[22,0],[-17,-17],[17,-17],[-17,17],[17,17]];
+const pents = [];
+for (const [sx, sz] of SPAWNS) {
+  const p = createPentagram(1.75); p.grp.position.set(sx, 0, sz); scene.add(p.grp); pents.push(p);
+  const pl = new THREE.PointLight(0xff2a10, 0.6, 7, 1.8); pl.position.set(sx, 0.5, sz); scene.add(pl);
+}
+scene.add(new THREE.PointLight(0xffd0a0, 1.5, 30, 1.3));   // лампа игрока
+scene.add(new THREE.PointLight(0xfff0c0, 0, 22, 1.6));     // дуло
+const ballLights = [];
+for (let i = 0; i < 6; i++) { const l = new THREE.PointLight(0xff7020, 0, 8, 1.6); scene.add(l); ballLights.push(l); }
+
+// ── системы частиц как в игре ──
+const gibMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1,1,1), new THREE.MeshStandardMaterial({roughness:.9}), 170);
+gibMesh.count = 0; gibMesh.frustumCulled = false; scene.add(gibMesh);
+const dust = createDustCloud(260, 0.2); scene.add(dust.mesh);
+
+const frame = () => renderer.render(scene, cam);
+const timeN = (n) => { const t = performance.now(); for (let i = 0; i < n; i++) frame(); return (performance.now() - t) / n; };
+for (const p of pents) for (let f = 0; f < 60; f++) p.update(1/60, f/60);
+timeN(40);
+
+const KINDS = ['gnaar','boom','kleer','bull','harpy','mech'];
+const rushKind = () => Math.random() < 0.75 ? 'boom' : KINDS[Math.floor(Math.random()*6)];
+
+const disposeTree = (o) => o.traverse((c) => {
+  if (!c.isMesh) return;
+  c.geometry?.dispose();
+  const m = c.material; if (Array.isArray(m)) m.forEach(x=>x.dispose()); else m?.dispose();
+});
+
+// ══ 1. СТАТИКА: пустая арена → волна 6 → волна 20 ══
+log('1. СТАТИЧНЫЙ КАДР ПРИ РАЗНОМ ЧИСЛЕ ТВАРЕЙ\n');
+const bare = timeN(60);
+log(`  арена без тварей:            ${bare.toFixed(2)} мс   ${renderer.info.render.calls} вызовов`);
+const live = [];
+const addMons = (n, vetChance) => {
+  for (let i = 0; i < n; i++) {
+    const r = buildMonster(rushKind(), Math.random() < vetChance);
+    r.grp.position.set((Math.random()-.5)*40, 0, (Math.random()-.5)*40);
+    scene.add(r.grp); live.push(r.grp);
+  }
+};
+addMons(12, 0.2); timeN(20);
+const w6 = timeN(60);
+log(`  12 тварей (≈волна 6):        ${w6.toFixed(2)} мс   ${renderer.info.render.calls} вызовов`);
+addMons(14, 0.5); timeN(20);
+const w20 = timeN(60);
+log(`  26 тварей (потолок, в.20):   ${w20.toFixed(2)} мс   ${renderer.info.render.calls} вызовов`);
+
+// насыщенные частицы
+const wcol = new THREE.Color(0xff8030);
+const dummy = new THREE.Object3D();
+for (let i = 0; i < 170; i++) {
+  dummy.position.set((Math.random()-.5)*30, Math.random()*2, (Math.random()-.5)*30);
+  dummy.scale.setScalar(0.2); dummy.updateMatrix();
+  gibMesh.setMatrixAt(i, dummy.matrix); gibMesh.setColorAt(i, wcol);
+}
+gibMesh.count = 170; gibMesh.instanceMatrix.needsUpdate = true;
+for (let i = 0; i < 260; i++) dust.put(i, (Math.random()-.5)*30, Math.random()*2, (Math.random()-.5)*30, 1.5, wcol, 0.5);
+dust.commit(260);
+for (const p of pents) { p.charge(2); for (let f = 0; f < 130; f++) p.update(1/60, 2+f/60); }
+for (const l of ballLights) l.intensity = 2.2;
+timeN(20);
+const full = timeN(60);
+log(`  + 170 гибов, 260 пыли,`);
+log(`    8 заряженных печатей,`);
+log(`    6 файерболов:              ${full.toFixed(2)} мс   ${renderer.info.render.calls} вызовов`);
+log(`\n  → полный кадр волны 20 укладывается в ${(full/16.7*100).toFixed(0)}% бюджета 60 fps`);
+
+// ══ 2. КРУГОВОРОТ: спавн + смерть с освобождением ══
+log('\n2. КРУГОВОРОТ «ПОЯВИЛСЯ / УМЕР» (на волне 20 это ~4 раза в секунду)\n');
+const progBefore = renderer.info.programs.length;
+const steady = timeN(60);
+
+// а) спавн + смерть С освобождением — как сейчас в игре
+let sumA = 0, worstA = 0;
+for (let i = 0; i < 40; i++) {
+  const r = buildMonster(rushKind(), i % 2 === 0);
+  r.grp.position.set((Math.random()-.5)*30, 0, (Math.random()-.5)*30);
+  scene.add(r.grp);
+  let t = performance.now(); frame(); const spawnMs = performance.now() - t;
+  scene.remove(r.grp);
+  t = performance.now(); disposeTree(r.grp); frame(); const dieMs = performance.now() - t;
+  sumA += spawnMs + dieMs; worstA = Math.max(worstA, spawnMs, dieMs);
+}
+log(`  с dispose (как в игре):      ${(sumA/40).toFixed(2)} мс на цикл  (худший кадр ${worstA.toFixed(2)})`);
+
+// б) то же, но БЕЗ освобождения — чтобы отделить цену dispose
+let sumB = 0, worstB = 0;
+const leaked = [];
+for (let i = 0; i < 40; i++) {
+  const r = buildMonster(rushKind(), i % 2 === 0);
+  r.grp.position.set((Math.random()-.5)*30, 0, (Math.random()-.5)*30);
+  scene.add(r.grp);
+  let t = performance.now(); frame(); const spawnMs = performance.now() - t;
+  scene.remove(r.grp); leaked.push(r.grp);
+  t = performance.now(); frame(); const dieMs = performance.now() - t;
+  sumB += spawnMs + dieMs; worstB = Math.max(worstB, spawnMs, dieMs);
+}
+log(`  без dispose (как было):      ${(sumB/40).toFixed(2)} мс на цикл  (худший кадр ${worstB.toFixed(2)})`);
+log(`  обычный кадр для сравнения:  ${steady.toFixed(2)} мс`);
+const progAfter = renderer.info.programs.length;
+log(`  программ в кэше: ${progBefore} → ${progAfter}  ${progBefore === progAfter ? '(не пересобираются — хорошо)' : '(МЕНЯЕТСЯ — пересборка!)'}`);
+for (const g of leaked) disposeTree(g);
+
+// ══ 3. ЧТО ЗАНИМАЕТ ВЫЗОВЫ ══
+log('\n3. РАСКЛАД ВЫЗОВОВ ОТРИСОВКИ В ПОЛНОМ КАДРЕ ВОЛНЫ 20\n');
+let monMeshes = 0;
+for (const g of live) g.traverse((o) => { if (o.isMesh) monMeshes++; });
+log(`  твари:            ${monMeshes} мешей (26 тварей × ~${(monMeshes/26).toFixed(0)} кубов)`);
+log(`  арена (пол/стены/пилоны/факелы): ~${13*13 + 5 + 10*2}`);
+log(`  печати:           ${pents.length * 4} (после слияния)`);
+log(`  частицы печатей:  ${pents.length}`);
+log(`  гибы + пыль:      2`);
+log(`  ИТОГО замерено:   ${renderer.info.render.calls}`);
+
+out.innerHTML += '\n\n<span class="ok">ГОТОВО</span>';
+</script></body></html>

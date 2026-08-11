@@ -1,0 +1,84 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>audiotest</title>
+<style>body{background:#111;color:#ddd;font:13px ui-monospace,monospace;padding:16px}
+pre{white-space:pre-wrap}.hi{color:#ff5a3a}.ok{color:#7bd88f}button{font:inherit;padding:8px 16px;margin-bottom:12px}</style></head>
+<body><button id="go">запустить замер (нужен клик — WebAudio)</button><pre id="out"></pre>
+<script type="module">
+import { createDoomAudio, getSharedAudioContext } from '/src/core/audioDoom.ts';
+
+const out = document.getElementById('out');
+const log = (s) => { out.textContent += '\n' + s; };
+const hi = (s) => { out.innerHTML += `\n<span class="hi">${s}</span>`; };
+
+document.getElementById('go').onclick = async () => {
+  document.getElementById('go').disabled = true;
+  out.textContent = 'жду загрузки сэмплов…';
+  const sfx = createDoomAudio();
+  const ctx = getSharedAudioContext();
+  await ctx.resume();
+  await new Promise((r) => setTimeout(r, 2500));   // дать сэмплам догрузиться
+  out.textContent = '';
+
+  const rnd = (a) => (Math.random() - 0.5) * a;
+
+  // ══ 1. ЦЕНА ОДНОГО ПОЗИЦИОННОГО ЗВУКА ══
+  log('1. ЦЕНА ВЫЗОВА sfx.play() НА ГЛАВНОМ ПОТОКЕ\n');
+  sfx.setListener(0, 0, 0);
+  const one = (id, n) => {
+    const t = performance.now();
+    for (let i = 0; i < n; i++) sfx.play(id, { x: rnd(40), z: rnd(40) });
+    return (performance.now() - t) / n;
+  };
+  log(`  monsterPain × 200:   ${one('monsterPain', 200).toFixed(4)} мс на вызов`);
+  log(`  explosion × 200:     ${one('explosion', 200).toFixed(4)} мс на вызов`);
+  log(`  chaingun × 200:      ${one('chaingun', 200).toFixed(4)} мс на вызов`);
+
+  // ══ 2. ЖИВЫЕ ГОЛОСА И ПОТОЛОК ══
+  log('\n2. СКОЛЬКО ГОЛОСОВ РЕАЛЬНО ЗВУЧИТ ОДНОВРЕМЕННО\n');
+  const ids = ['chaingun','monsterPain','monsterDie','gib','explosion','fireball','fireballHit','teleport','step','kleerLeap','bullSnort','harpyFlap'];
+  let created = 0;
+  const t2 = performance.now();
+  for (let r = 0; r < 12; r++) for (const id of ids) { sfx.play(id, { x: rnd(40), z: rnd(40) }); created++; }
+  const burst = performance.now() - t2;
+  log(`  ${created} вызовов подряд (как в свалке): ${burst.toFixed(2)} мс всего`);
+  log(`  потолок 4 копии на звук × ${ids.length} звуков = до ${ids.length * 4} одновременных источников`);
+  log(`  у каждого до 5 узлов WebAudio (источник, фильтр, панорама, громкость, посыл в реверб)`);
+  hi(`  → в пике это ~${ids.length * 4 * 5} узлов в графе`);
+
+  // ══ 3. ВОЙ КАМИКАДЗЕ: ПЕРЕСЧЁТ КАЖДЫЙ КАДР ══
+  log('\n3. setListener() — зовётся КАЖДЫЙ КАДР и пересчитывает все петли\n');
+  const loops = [];
+  for (let i = 0; i < 4; i++) loops.push(sfx.loop('boomWail', { x: rnd(30), z: rnd(30) }));
+  const frames = 600;
+  const t3 = performance.now();
+  for (let f = 0; f < frames; f++) {
+    for (const L of loops) L.move(rnd(30), rnd(30));
+    sfx.setListener(rnd(20), rnd(20), f * 0.01);
+  }
+  const perFrame = (performance.now() - t3) / frames;
+  log(`  ${frames} кадров с 4 петлями: ${perFrame.toFixed(4)} мс на кадр`);
+  log(`  за 10 секунд боя это ${(perFrame * 600).toFixed(1)} мс суммарно`);
+
+  // ══ 4. НАКОПЛЕНИЕ СОБЫТИЙ АВТОМАТИЗАЦИИ ══
+  log('\n4. НАКАПЛИВАЮТСЯ ЛИ СОБЫТИЯ АВТОМАТИЗАЦИИ ЗА ДОЛГУЮ ИГРУ\n');
+  log('  setTargetAtTime вызывается 4 раза на петлю на кадр = ' + (4 * 4 * 60) + '/сек');
+  const t4a = performance.now();
+  for (let f = 0; f < 300; f++) sfx.setListener(rnd(20), rnd(20), f * 0.01);
+  const early = (performance.now() - t4a) / 300;
+  for (let f = 0; f < 6000; f++) sfx.setListener(rnd(20), rnd(20), f * 0.01);   // ~100 секунд боя
+  const t4b = performance.now();
+  for (let f = 0; f < 300; f++) sfx.setListener(rnd(20), rnd(20), f * 0.01);
+  const late = (performance.now() - t4b) / 300;
+  log(`  setListener в начале:            ${early.toFixed(4)} мс`);
+  log(`  он же после ~100 с непрерывной работы: ${late.toFixed(4)} мс`);
+  if (late > early * 2.5) hi(`  → ДЕГРАДАЦИЯ в ${(late / early).toFixed(1)} раза — события копятся!`);
+  else log(`  → деградации нет (×${(late / early).toFixed(2)})`);
+
+  for (const L of loops) L.stop(0.05);
+  log('\n5. КОНТЕКСТ');
+  log(`  состояние AudioContext: ${ctx.state}, частота ${ctx.sampleRate} Гц`);
+  log(`  baseLatency ${(ctx.baseLatency * 1000).toFixed(1)} мс, outputLatency ${((ctx.outputLatency || 0) * 1000).toFixed(1)} мс`);
+  out.innerHTML += '\n\n<span class="ok">ГОТОВО</span>';
+  setTimeout(() => sfx.dispose(), 1200);
+};
+</script></body></html>
