@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>ФАЄРВОЛ — офлайн-микс дорожки по журналу</title>
+</head>
+<body style="background:#1a0808;color:#e8c8a0;font:14px ui-monospace,monospace;padding:24px">
+<h1 style="font-size:16px">Офлайн-микс звуковой дорожки</h1>
+<p>Страница без интерфейса: её открывает <code>tools/record.mjs</code> и зовёт
+<code>window.mixLog(events, durationSec, markerLogT, markerVideoT)</code> — тот
+возвращает WAV (16 бит, 48 кГц, стерео) строкой base64.</p>
+<pre id="out">жду вызова…</pre>
+<script>
+/*
+ * ЗАЧЕМ. Ролик снимается захватом экрана, а WebAudio приходит в запись с
+ * плавающей задержкой — на монтаже выстрел уезжает от вспышки на кадр-другой.
+ * Поэтому игра пишется молча (?music=0) и ведёт журнал (?sfxlog=1), а дорожку
+ * мы собираем здесь заново, в OfflineAudioContext, уже В ТАЙМЛАЙНЕ ВИДЕО.
+ *
+ * ВАЖНО: константы ниже — КОПИЯ src/core/audioDoom.ts. Меняются только вместе
+ * с ним, иначе микс перестанет звучать как игра.
+ */
+
+// ── карта звуков: id → файл в /sfx, громкость, разброс высоты ──
+const SFX = {
+  pistol: { file: 'pistol.wav', gain: 1.66, vary: 0.06 },
+  shotgun: { file: 'shotgun.wav', gain: 2.4, vary: 0.05 },
+  chaingun: { file: 'chaingun.wav', gain: 0.25, vary: 0.09 },
+  rocket: { file: 'rocket.wav', gain: 0.5, vary: 0.05 },
+  dryClick: { file: 'dryClick.ogg', gain: 1.3, vary: 0.03 },
+  weaponSwitch: { file: 'weaponSwitch.ogg', gain: 1.23, vary: 0.04 },
+  explosion: { file: 'explosion.wav', gain: 1.29, vary: 0.07 },
+  fireball: { file: 'fireball.wav', gain: 0.94, vary: 0.08 },
+  fireballHit: { file: 'fireballHit.wav', gain: 1.23, vary: 0.06 },
+  gnaar: { file: 'gnaar.wav', gain: 1.76, vary: 0.12 },
+  boomWail: { file: 'boomWail.wav', gain: 1.45, vary: 0.1 },
+  kleerRattle: { file: 'kleerRattle.ogg', gain: 1.69, vary: 0.12 },
+  kleerLeap: { file: 'kleerLeap.wav', gain: 1.57, vary: 0.08 },
+  bullSnort: { file: 'bullSnort.wav', gain: 0.86, vary: 0.09 },
+  harpyFlap: { file: 'harpyFlap.ogg', gain: 0.76, vary: 0.14 },
+  mechServo: { file: 'mechServo.wav', gain: 0.6, vary: 0.07 },
+  monsterPain: { file: 'monsterPain.wav', gain: 0.37, vary: 0.14 },
+  monsterDie: { file: 'monsterDie.wav', gain: 0.94, vary: 0.1 },
+  gib: { file: 'gib.wav', gain: 1.14, vary: 0.12 },
+  playerPain: { file: 'playerPain.wav', gain: 1.07, vary: 0.08 },
+  playerDie: { file: 'playerDie.wav', gain: 1.03, vary: 0 },
+  step: { file: 'step.wav', gain: 0.21, vary: 0.13 },
+  heartbeat: { file: 'heartbeat.wav', gain: 1.16, vary: 0 },
+  pickHealth: { file: 'pickHealth.ogg', gain: 0.98, vary: 0.04 },
+  pickArmor: { file: 'pickArmor.wav', gain: 0.62, vary: 0.05 },
+  pickAmmo: { file: 'pickAmmo.ogg', gain: 1.82, vary: 0.07 },
+  pickWeapon: { file: 'pickWeapon.wav', gain: 1.73, vary: 0 },
+  teleport: { file: 'teleport.wav', gain: 0.6, vary: 0.06 },
+  menuMove: { file: 'menuMove.ogg', gain: 1.22, vary: 0.05 },
+  menuSelect: { file: 'menuSelect.ogg', gain: 1.51, vary: 0 },
+  waveStart: { file: 'waveStart.wav', gain: 0.62, vary: 0 },
+  waveClear: { file: 'waveClear.wav', gain: 1.11, vary: 0 },
+  cash: { file: 'cash.wav', gain: 1.24, vary: 0.05 },
+};
+
+// затухание, панорама, глухота — те же числа, что в audioDoom
+const REF = 4.5, ROLL = 0.62, MAX_DIST = 58;
+const SMOOTH = 0.05;      // сглаживание ведения лупов
+const LOOP_MAX = 4;       // столько же голосов, сколько отдавала игра
+const SR = 48000;
+
+/**
+ * Псевдослучайность ДЕТЕРМИНИРОВАННАЯ. В игре расстройка высоты и хвост
+ * реверберации берутся из Math.random, здесь — из хэша: два прогона одного
+ * журнала обязаны дать побайтово одинаковый WAV, иначе нечего и сверять.
+ */
+const hash01 = (n) => {
+  let h = (n * 2654435761) >>> 0;
+  h ^= h >>> 15; h = Math.imul(h, 2246822519);
+  h ^= h >>> 13; h = Math.imul(h, 3266489917);
+  h ^= h >>> 16;
+  return (h >>> 0) / 4294967296;
+};
+
+/** импульсный отклик «зала»: то же 1.4 с / степень 3.4, но на детерминированном шуме */
+function reverbIR(ctx, sec, decay) {
+  const len = Math.max(1, Math.floor(ctx.sampleRate * sec));
+  const b = ctx.createBuffer(2, len, ctx.sampleRate);
+  for (let ch = 0; ch < 2; ch++) {
+    const d = b.getChannelData(ch);
+    for (let i = 0; i < len; i++) d[i] = (hash01(i * 2 + ch + 1) * 2 - 1) * Math.pow(1 - i / len, decay);
+  }
+  return b;
+}
+
+/**
+ * Трек слушателя (~15 Гц). Позиция звука считается ОТНОСИТЕЛЬНО бойца, поэтому
+ * на момент каждого события его положение берём интерполяцией между отметками.
+ * yaw крутится через ±π — интерполируем по кратчайшей дуге, иначе на переходе
+ * панорама делает полный оборот.
+ */
+function makeListenerTrack(events) {
+  const pts = events.filter((e) => e.type === 'listener').sort((a, b) => a.t - b.t);
+  return (t) => {
+    if (!pts.length) return { x: 0, z: 0, yaw: 0 };
+    if (t <= pts[0].t) return pts[0];
+    if (t >= pts[pts.length - 1].t) return pts[pts.length - 1];
+    let lo = 0, hi = pts.length - 1;
+    while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (pts[mid].t <= t) lo = mid; else hi = mid; }
+    const a = pts[lo], b = pts[hi];
+    const k = b.t > a.t ? (t - a.t) / (b.t - a.t) : 0;
+    let dy = b.yaw - a.yaw;
+    while (dy > Math.PI) dy -= Math.PI * 2;
+    while (dy < -Math.PI) dy += Math.PI * 2;
+    return { x: a.x + (b.x - a.x) * k, z: a.z + (b.z - a.z) * k, yaw: a.yaw + dy * k };
+  };
+}
+
+/** сила, панорама, глухота и хвост — формула один в один из audioDoom.spatial() */
+function spatial(x, z, L) {
+  const s = Math.sin(L.yaw), c = Math.cos(L.yaw);
+  const lRx = c, lRz = -s;                       // вправо = (cos yaw, −sin yaw)
+  const dx = x - L.x, dz = z - L.z;
+  const dist = Math.hypot(dx, dz);
+  const att = REF / (REF + ROLL * Math.max(0, dist - REF));
+  let pan = 0;
+  if (dist > 0.4) {
+    const side = (dx * lRx + dz * lRz) / dist;
+    pan = Math.max(-1, Math.min(1, side * Math.min(1, dist / 1.6) * 0.92));
+  }
+  const cut = dist > 8 ? Math.max(1300, 20000 * Math.pow(0.5, (dist - 8) / 7)) : 20000;
+  const wet = dist > 6 ? Math.min(1.6, (dist - 6) / 22) : 0;
+  return { dist, att, pan, cut, wet };
+}
+
+/** сэмплы тянем с того же сервера, что и игра (public/sfx) */
+async function loadBuffers(ctx) {
+  const out = new Map();
+  await Promise.all(Object.keys(SFX).map(async (id) => {
+    try {
+      const res = await fetch(`/sfx/${SFX[id].file}`);
+      if (!res.ok) throw new Error(String(res.status));
+      out.set(id, await ctx.decodeAudioData(await res.arrayBuffer()));
+    } catch (e) {
+      console.warn('[mix] не загрузился', id, e);
+    }
+  }));
+  return out;
+}
+
+/** AudioBuffer → WAV (16 бит PCM) → base64 */
+function wavBase64(buf) {
+  const ch = buf.numberOfChannels, n = buf.length;
+  const data = new DataView(new ArrayBuffer(44 + n * ch * 2));
+  const put = (off, str) => { for (let i = 0; i < str.length; i++) data.setUint8(off + i, str.charCodeAt(i)); };
+  put(0, 'RIFF'); data.setUint32(4, 36 + n * ch * 2, true); put(8, 'WAVE');
+  put(12, 'fmt '); data.setUint32(16, 16, true); data.setUint16(20, 1, true);
+  data.setUint16(22, ch, true); data.setUint32(24, buf.sampleRate, true);
+  data.setUint32(28, buf.sampleRate * ch * 2, true); data.setUint16(32, ch * 2, true);
+  data.setUint16(34, 16, true); put(36, 'data'); data.setUint32(40, n * ch * 2, true);
+  const chans = [];
+  for (let c = 0; c < ch; c++) chans.push(buf.getChannelData(c));
+  let off = 44;
+  for (let i = 0; i < n; i++) {
+    for (let c = 0; c < ch; c++) {
+      const v = Math.max(-1, Math.min(1, chans[c][i]));
+      data.setInt16(off, v < 0 ? v * 0x8000 : v * 0x7fff, true);
+      off += 2;
+    }
+  }
+  // btoa давится длинной строкой — режем на куски
+  const bytes = new Uint8Array(data.buffer);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(bin);
+}
+
+/**
+ * Собрать дорожку. events — window.__sfxLog.events из забега, markerLogT —
+ * время маркера в журнале, markerVideoT — pts того же белого кадра в видео.
+ * Всё, что до нуля видео, отбрасывается.
+ */
+window.mixLog = async function mixLog(events, durationSec, markerLogT, markerVideoT) {
+  const out = document.getElementById('out');
+  const ctx = new OfflineAudioContext(2, Math.ceil(SR * durationSec), SR);
+  const buffers = await loadBuffers(ctx);
+
+  // ── финальная цепь: та же, что в игре ──
+  const bus = ctx.createGain(); bus.gain.value = 0.9;
+  const comp = ctx.createDynamicsCompressor();
+  comp.threshold.value = -12; comp.knee.value = 20; comp.ratio.value = 4;
+  comp.attack.value = 0.004; comp.release.value = 0.25;
+  const conv = ctx.createConvolver(); conv.buffer = reverbIR(ctx, 1.4, 3.4);
+  const dry = ctx.createGain(); dry.gain.value = 0.9;
+  const wetBus = ctx.createGain(); wetBus.gain.value = 0.16;
+  bus.connect(dry); dry.connect(comp);
+  bus.connect(conv); conv.connect(wetBus); wetBus.connect(comp);
+  comp.connect(ctx.destination);
+
+  const lisAt = makeListenerTrack(events);
+  /** журнальное время → время в таймлайне видео */
+  const toVideo = (t) => t - markerLogT + markerVideoT;
+
+  // Журнал пишется ДО ограничителей игры, поэтому часть отметок в игре не
+  // прозвучала. Луп, которому не досталось голоса (LOOP_MAX), возвращает пустую
+  // ручку — по ней потом никто не зовёт move/stop. Такие loopStart отбрасываем.
+  const followed = new Set();
+  for (const e of events) if (e.type === 'loopMove' || e.type === 'loopStop') followed.add(e.h);
+
+  const stats = { play: 0, skipped: 0, loops: 0, missing: 0 };
+  const active = [];                 // {id, end} — эмуляция ограничителя наложений
+
+  for (let i = 0; i < events.length; i++) {
+    const e = events[i];
+    if (e.type === 'listener' || e.type === 'marker' || e.type === 'loopMove' || e.type === 'loopStop') continue;
+    const at = toVideo(e.t);
+    if (at < 0 || at >= durationSec) { stats.skipped++; continue; }
+    const def = SFX[e.id];
+    const buf = buffers.get(e.id);
+    if (!def || !buf) { stats.missing++; continue; }
+    const positional = typeof e.x === 'number' && typeof e.z === 'number';
+    const L = lisAt(e.t);
+
+    if (e.type === 'loopStart') {
+      // ── непрерывный вой камикадзе ──
+      if (!followed.has(e.h)) { stats.skipped++; continue; }
+      const alive = events.filter((q) => q.type === 'loopStart' && q.h !== e.h && followed.has(q.h)
+        && toVideo(q.t) <= at && (loopEnd(q.h) ?? durationSec) > at).length;
+      if (alive >= LOOP_MAX) { stats.skipped++; continue; }
+      const sp = spatial(e.x, e.z, L);
+      const src = ctx.createBufferSource();
+      src.buffer = buf; src.loop = true;
+      src.loopStart = 0; src.loopEnd = buf.duration;
+      if (def.vary) src.playbackRate.value = 1 + (hash01(i) * 2 - 1) * def.vary;
+      const g = ctx.createGain();
+      const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = sp.cut;
+      const pn = ctx.createStereoPanner(); pn.pan.value = sp.pan;
+      const send = ctx.createGain(); send.gain.value = sp.wet;
+      src.connect(lp); lp.connect(pn); pn.connect(g); g.connect(bus);
+      g.connect(send); send.connect(conv);
+      // плавный вход — вой не должен включаться щелчком
+      g.gain.setValueAtTime(0.0001, at);
+      g.gain.setTargetAtTime(def.gain * sp.att, at, 0.12);
+      let last = def.gain * sp.att;
+      // ВЕДЕНИЕ: точки loopMove идут ~10 Гц, а в игре параметры ползут
+      // setTargetAtTime со SMOOTH=0.05 — оставляем именно её, иначе на
+      // ступеньках слышен «зиппер», ради которого сглаживание и заводили
+      for (const mv of events) {
+        if (mv.type !== 'loopMove' || mv.h !== e.h) continue;
+        const mt = toVideo(mv.t);
+        if (mt < at || mt >= durationSec) continue;
+        const s2 = spatial(mv.x, mv.z, lisAt(mv.t));
+        g.gain.setTargetAtTime(def.gain * s2.att, mt, SMOOTH);
+        pn.pan.setTargetAtTime(s2.pan, mt, SMOOTH);
+        lp.frequency.setTargetAtTime(s2.cut, mt, SMOOTH);
+        send.gain.setTargetAtTime(s2.wet, mt, SMOOTH);
+        last = def.gain * s2.att;
+      }
+      const stopEv = events.find((q) => q.type === 'loopStop' && q.h === e.h);
+      const fade = stopEv && typeof stopEv.fade === 'number' ? stopEv.fade : 0.18;
+      const stopAt = stopEv ? Math.min(toVideo(stopEv.t), durationSec) : durationSec;
+      if (stopAt > at) {
+        g.gain.cancelScheduledValues(stopAt);
+        g.gain.setValueAtTime(last, stopAt);
+        g.gain.linearRampToValueAtTime(0.0001, stopAt + fade);
+      }
+      src.start(at, hash01(i + 7777) * buf.duration);
+      src.stop(Math.min(durationSec, stopAt + fade + 0.05));
+      stats.loops++;
+      continue;
+    }
+
+    // ── обычный звук ──
+    let vol = def.gain, pan = 0, dist = 0, cut = 20000, wet = 0;
+    if (positional) {
+      const sp = spatial(e.x, e.z, L);
+      if (sp.dist > MAX_DIST) { stats.skipped++; continue; }   // за краем арены
+      vol *= sp.att;
+      if (vol < 0.015) { stats.skipped++; continue; }          // всё равно не слышно
+      dist = sp.dist; pan = sp.pan; cut = sp.cut; wet = sp.wet;
+    }
+    // ограничитель наложений игры: больше пяти копий одного звука не звучало
+    for (let q = active.length - 1; q >= 0; q--) if (active[q].end <= at) active.splice(q, 1);
+    if (active.filter((q) => q.id === e.id).length > 4) { stats.skipped++; continue; }
+
+    const rate = def.vary ? 1 + (hash01(i) * 2 - 1) * def.vary : 1;
+    const maxLen = e.id === 'mechServo' ? 0.7 : e.id === 'heartbeat' ? 1.1 : buf.duration;
+    const src = ctx.createBufferSource();
+    src.buffer = buf; src.playbackRate.value = rate;
+    const g = ctx.createGain(); g.gain.value = vol;
+    if (maxLen < buf.duration) {
+      g.gain.setValueAtTime(vol, at + maxLen - 0.15);
+      g.gain.linearRampToValueAtTime(0.0001, at + maxLen);
+    }
+    // цепочка: src → [ФНЧ вдали] → [панорама] → громкость → шина (+ хвост)
+    let head = g;
+    if (positional && pan !== 0) { const pn = ctx.createStereoPanner(); pn.pan.value = pan; pn.connect(head); head = pn; }
+    if (positional && dist > 8) { const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = cut; lp.connect(head); head = lp; }
+    g.connect(bus);
+    if (wet > 0) { const send = ctx.createGain(); send.gain.value = wet; g.connect(send); send.connect(conv); }
+    src.connect(head);
+    src.start(at, 0, maxLen);
+    active.push({ id: e.id, end: at + maxLen / rate });
+    stats.play++;
+  }
+
+  /** конец лупа в таймлайне видео — нужен, чтобы считать одновременные голоса */
+  function loopEnd(h) {
+    const s = events.find((q) => q.type === 'loopStop' && q.h === h);
+    return s ? toVideo(s.t) : null;
+  }
+
+  const rendered = await ctx.startRendering();
+  const b64 = wavBase64(rendered);
+  const msg = `смикшировано: ${stats.play} звуков, ${stats.loops} воев, пропущено ${stats.skipped}, нет сэмпла ${stats.missing}`;
+  if (out) out.textContent = msg;
+  window.__mixStats = stats;
+  console.log('[mix]', msg);
+  return b64;
+};
+
+document.getElementById('out').textContent = 'готов: window.mixLog(events, durationSec, markerLogT, markerVideoT)';
+</script>
+</body>
+</html>

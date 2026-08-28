@@ -119,11 +119,13 @@ interface Puff { x: number; y: number; z: number; vy: number; life: number; max:
  * WebAudio приходит в запись с плавающей задержкой — поэтому картинку пишем
  * молча, а дорожку собирают потом по этим отметкам (t — секунды performance.now).
  * `h` — номер зацикленного голоса: без него не понять, какой из воев сдвинулся.
+ * Трек `listener` — положение и взгляд бойца: без него пространство не
+ * пересобрать, вся панорама и глухота считаются ОТНОСИТЕЛЬНО него.
  */
 interface SfxEv {
   t: number;
-  type?: 'loopStart' | 'loopMove' | 'loopStop' | 'marker';
-  id?: SfxId; x?: number; z?: number; h?: number; fade?: number;
+  type?: 'loopStart' | 'loopMove' | 'loopStop' | 'marker' | 'listener';
+  id?: SfxId; x?: number; z?: number; yaw?: number; h?: number; fade?: number;
 }
 
 const WEAPONS = [
@@ -1095,6 +1097,16 @@ export const doom: MiniGame3D = {
           },
           stop(fade) { sfxEvents.push({ type: 'loopStop', t: now(), fade, h }); L.stop(fade); },
         };
+      };
+      // Трек слушателя ~15 Гц. setListener зовётся раз в кадр и только в бою,
+      // так что трек сам собой начинается с первого боевого кадра и не пишется
+      // ни в титуле, ни в редакторе.
+      const rawListener = sfx.setListener;
+      let lisT = -1;
+      sfx.setListener = (x, z, yaw) => {
+        const t = now();
+        if (t - lisT >= 1 / 15) { lisT = t; sfxEvents.push({ type: 'listener', t, x, z, yaw }); }
+        rawListener(x, z, yaw);
       };
     }
     const keys = new Set<string>();
@@ -2640,6 +2652,12 @@ export const doom: MiniGame3D = {
       // Иначе бот залипает на точке респауна: пикап уже забрали, а он всё стоит
       // и ждёт, — в кадре при этом не происходит ничего.
       if (botGoalCd > 0) botGoalCd -= dt;
+      // Ракетница, лежащая на арене, важнее аптечки и патронов: подбор ствола
+      // под огнём — тот самый кадр, ради которого волна 16 и снимается. Ходу к
+      // ней даём 6 с вместо полутора — лежит она далеко, а бот идёт с боем.
+      const rktLying = !owned[3] && botGoalCd <= 0
+        ? pickups.find((p) => p.kind === 'launcher' && p.taken <= 0) : undefined;
+      if (rktLying && botGoal !== rktLying) { botGoal = rktLying; botGoalT = 6; }
       if (botGoal) {
         botGoalT -= dt;
         if (botGoalT <= 0 || botGoal.taken > 0) { botGoal = null; botGoalCd = 3; }
