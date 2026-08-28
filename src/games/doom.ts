@@ -6,6 +6,7 @@ import { isTouchDevice, createMultiTouch, inCircle, drawButton, fitFont } from '
 import { createPentagram, createEmberCloud, createDustCloud, buildMonster, buildWeapon, buildPickup, buildProp, buildRocket, bakeStatic, ROCKET, DEFAULT_ARENA, BUILTIN_ARENAS, ARENA_CAPS, validateArena, type ArenaDef, type Pentagram } from './doomModels';
 import { createDoomAudio, type SfxId, type SfxLoop } from '../core/audioDoom';
 import { createMusicDirector } from '../core/musicDirector';
+import { makeT, hasStr, STRINGS, type LangId } from './i18n';
 
 /**
  * Фриланс — плейтест шутера. ОРИГИНАЛЬНЫЙ воксельный оммаж: интерфейс и повадки —
@@ -34,8 +35,9 @@ const P_RADIUS = 0.55;
  * быстрее их атаки, в сэме — ещё и заметно больше народу разом плюс ветераны.
  */
 interface Diff {
+  /** он же ключ рекорда (fw_best) и ключ названия в словаре: diff.<key>[.hint] */
   key: 'norm' | 'hard' | 'core';
-  name: string; hint: string; col: string;
+  col: string;
   dmg: number;        // множитель урона от тварей
   heal: number;       // множитель аптечек и брони
   budget: number;     // множитель бюджета волны
@@ -52,17 +54,17 @@ interface Diff {
 }
 const DIFFS: Diff[] = [
   {
-    key: 'norm', name: 'ЗВИЧАЙНА', hint: 'як задумано', col: '#7bd88f',
+    key: 'norm', col: '#7bd88f',
     dmg: 1, heal: 1, budget: 1, cap: 26, rate: 1, vetFrom: 4, vetMax: 0.5,
     atk: 1, ammoMul: 1, respawn: 14, breather: 4, score: 1, boomAlways: false,
   },
   {
-    key: 'hard', name: 'ВАЖКА', hint: 'бьют больнее, аптечки скупее', col: '#e8c840',
+    key: 'hard', col: '#e8c840',
     dmg: 1.5, heal: 0.6, budget: 1.3, cap: 32, rate: 0.85, vetFrom: 2, vetMax: 0.65,
     atk: 0.8, ammoMul: 1, respawn: 12, breather: 3.5, score: 1.35, boomAlways: true,
   },
   {
-    key: 'core', name: 'ХАРДКОР', hint: 'месиво · патронов больше, времени нет', col: '#ff4a2a',
+    key: 'core', col: '#ff4a2a',
     dmg: 2, heal: 0.45, budget: 1.85, cap: 44, rate: 0.55, vetFrom: 1, vetMax: 0.8,
     atk: 0.6, ammoMul: 1.6, respawn: 8, breather: 2, score: 1.9, boomAlways: true,
   },
@@ -160,6 +162,37 @@ export const doom: MiniGame3D = {
     void document.fonts?.load?.('16px "PixelHalf"');
     const FONT = (n: number) => `${n}px "PixelHalf", ui-monospace, monospace`;
     const FAM = '"PixelHalf", ui-monospace, monospace';
+    /** служебный моноширинный: счётчики и подсказки редактора */
+    const MONO = 'ui-monospace, monospace';
+
+    // ── ЯЗЫК ИНТЕРФЕЙСА ──
+    // Выбранный лежит в fw_lang; если игрок ещё не выбирал — берём по локали
+    // браузера (славянская → украинский, иначе английский). Отладочный ?lang=
+    // перебивает всё, но в хранилище НЕ пишется: ссылка для скриншотов не
+    // должна менять настройку живого игрока.
+    const qs = new URLSearchParams(location.search);
+    const pickLang = (): LangId => {
+      const flag = qs.get('lang');
+      if (flag === 'uk' || flag === 'en') return flag;
+      try {
+        const saved = localStorage.getItem('fw_lang');
+        if (saved === 'uk' || saved === 'en') return saved;
+      } catch { /* приватный режим */ }
+      return /^(uk|ru|be)/i.test(navigator.language ?? '') ? 'uk' : 'en';
+    };
+    let lang: LangId = pickLang();
+    // Строки нигде не кешируются: HUD рисуется каждый кадр, поэтому смена
+    // языка — это просто новый t, пересобирать нечего.
+    let t = makeT(lang);
+    const setLang = (l: LangId) => {
+      lang = l;
+      t = makeT(l);
+      try { localStorage.setItem('fw_lang', l); } catch { /* приватный режим */ }
+    };
+    const toggleLang = () => setLang(lang === 'uk' ? 'en' : 'uk');
+    /** название и подсказка сложности — по её ключу */
+    const dName = (d: Diff) => t(`diff.${d.key}`);
+    const dHint = (d: Diff) => t(`diff.${d.key}.hint`);
 
     cam.fov = 78; cam.near = 0.1; cam.far = 220; cam.updateProjectionMatrix();
 
@@ -280,14 +313,36 @@ export const doom: MiniGame3D = {
       }
     } catch { /* noop */ }
 
+    /**
+     * Ярлык встроенной арены на языке интерфейса. Перевода может не быть
+     * (добавили новую встроенную — словарь ещё не догнал), тогда показываем
+     * её собственное имя из doomModels.
+     */
+    const builtinLabel = (i: number): string =>
+      hasStr(`arena.b${i}`) ? t(`arena.b${i}`) : BUILTIN_ARENAS[i].name;
     /** варианты для переключателя в титуле: базовая, встроенные, черновик, свои */
     const arenaOptions = (): { token: string; label: string }[] => {
-      const opts = [{ token: 'default', label: 'БАЗОВА' }];
-      BUILTIN_ARENAS.forEach((b, i) => opts.push({ token: `b:${i}`, label: b.name }));
-      if (localStorage.getItem('fw_arena_draft')) opts.push({ token: 'draft', label: 'ЧЕРНЕТКА' });
+      const opts = [{ token: 'default', label: t('arena.default') }];
+      BUILTIN_ARENAS.forEach((_, i) => opts.push({ token: `b:${i}`, label: builtinLabel(i) }));
+      if (localStorage.getItem('fw_arena_draft')) opts.push({ token: 'draft', label: t('arena.draft') });
       for (const nm of Object.keys(loadStore())) opts.push({ token: `u:${nm}`, label: nm });
       return opts;
     };
+    /**
+     * Имена, которые нельзя занять своей ареной: и собственные имена
+     * встроенных, и их ярлыки на ОБОИХ языках — иначе после переключения
+     * языка своя арена начнёт спорить со встроенной в диалоге загрузки.
+     */
+    const reservedArenaNames = (): Set<string> => {
+      const res = new Set<string>();
+      const both = (key: string) => { const r = STRINGS[key]; if (r) { res.add(r.uk); res.add(r.en); } };
+      both('arena.default'); both('arena.draft');
+      BUILTIN_ARENAS.forEach((b, i) => { res.add(b.name); both(`arena.b${i}`); });
+      return res;
+    };
+    /** названия неба и пола — общие у редактора и его строки состояния */
+    const skyName = (s: ArenaDef['sky']) => t(`sky.${s ?? 'hell'}`);
+    const groundName = (gr: ArenaDef['ground']) => t(`ground.${gr ?? 'checker'}`);
     const loadArena = (): ArenaDef => {
       const use = localStorage.getItem('fw_arena_use') ?? 'default';
       try {
@@ -766,7 +821,7 @@ export const doom: MiniGame3D = {
     const ammo = { bul: 60, shl: 0, rkt: 0 };
     let fireCd = 0, bob = 0, kick = 0, flashT = 0, flashCol = 0;
     // отладка: ?wave=20 стартует сразу с двадцатой, ?perf=1 включает счётчик
-    const qs = new URLSearchParams(location.search);
+    // (сам qs разобран выше — он нужен уже для ?lang)
     const startWaveAt = Math.max(1, Math.min(99, Number(qs.get('wave')) || 1));
     let showPerf = qs.get('perf') === '1';
     // Флаги под запись промо-роликов. Дубль идёт целиком, без монтажных склеек:
@@ -800,12 +855,14 @@ export const doom: MiniGame3D = {
     // выбор запоминается между забегами
     let diffIx = Math.max(0, DIFFS.findIndex((d) => d.key === localStorage.getItem('fw_diff')));
     let D = DIFFS[diffIx];
-    const titleMenu = (): { label: string; act: 'play' | 'diff' | 'arena' | 'edit'; hint?: string }[] => {
-      const it: { label: string; act: 'play' | 'diff' | 'arena' | 'edit'; hint?: string }[] = [
-        { label: 'НОВА ГРА', act: 'play' },
-        { label: `СКЛАДНІСТЬ: ${D.name}`, act: 'diff', hint: D.hint },
-        { label: `АРЕНА: ${arenaLabel()}`, act: 'arena', hint: 'базова, вбудовані та свої' },
-        { label: 'РЕДАКТОР АРЕНИ', act: 'edit' },
+    type MenuAct = 'play' | 'diff' | 'arena' | 'lang' | 'edit';
+    const titleMenu = (): { label: string; act: MenuAct; hint?: string }[] => {
+      const it: { label: string; act: MenuAct; hint?: string }[] = [
+        { label: t('menu.play'), act: 'play' },
+        { label: t('menu.diff', dName(D)), act: 'diff', hint: dHint(D) },
+        { label: t('menu.arena', arenaLabel()), act: 'arena', hint: t('menu.arena.hint') },
+        { label: t('menu.lang'), act: 'lang', hint: t('menu.lang.hint') },
+        { label: t('menu.edit'), act: 'edit' },
       ];
       return it;
     };
@@ -1146,14 +1203,14 @@ export const doom: MiniGame3D = {
           return;
         }
         if (e.code === 'KeyX') { eClickR = true; return; }
-        if (e.code === 'KeyT') { eRot = (eRot + 45) % 180; eSay(`ПОВОРОТ: ${eRot}°`); return; }
+        if (e.code === 'KeyT') { eRot = (eRot + 45) % 180; eSay(t('ed.rot', eRot)); return; }
         if (e.code === 'KeyF') {
           eDef.ground = eDef.ground === 'sand' ? 'sand_road'
             : eDef.ground === 'sand_road' ? 'stone'
               : eDef.ground === 'stone' ? 'cobble'
                 : eDef.ground === 'cobble' ? 'checker' : 'sand';
           rebuildEditor();
-          eSay(`ПОЛ: ${eDef.ground === 'checker' ? 'ШАХМАТКА' : eDef.ground === 'sand' ? 'ПЕСОК' : eDef.ground === 'sand_road' ? 'ПЕСОК + ДОРОГА' : eDef.ground === 'stone' ? 'КАМЕНЬ' : 'БРУСЧАТКА'}`);
+          eSay(t('ed.floor', groundName(eDef.ground)));
           return;
         }
         if (e.code === 'KeyG') { testPlayFromEditor(); return; }
@@ -1161,27 +1218,27 @@ export const doom: MiniGame3D = {
         if (e.code === 'KeyE') {
           try {
             void navigator.clipboard?.writeText(JSON.stringify(eDef));
-            eSay('АРЕНА СКОПИРОВАНА В БУФЕР');
-          } catch { eSay('БУФЕР НЕДОСТУПЕН'); }
+            eSay(t('ed.copied'));
+          } catch { eSay(t('ed.noClip')); }
           return;
         }
         if (e.code === 'KeyI') {
           if (document.pointerLockElement) document.exitPointerLock?.();
-          const t = window.prompt('Вставь JSON арены:');
-          if (t) {
+          const raw = window.prompt(t('ed.pastePrompt'));
+          if (raw) {
             try {
-              const v = validateArena(JSON.parse(t));
-              if (v) { eDef = v; rebuildEditor(); eSay('АРЕНА ИМПОРТИРОВАНА'); }
-              else eSay('НЕ ПОХОЖЕ НА АРЕНУ (нужно ≥2 печатей)');
-            } catch { eSay('БИТЫЙ JSON'); }
+              const v = validateArena(JSON.parse(raw));
+              if (v) { eDef = v; rebuildEditor(); eSay(t('ed.imported')); }
+              else eSay(t('ed.notArena'));
+            } catch { eSay(t('ed.badJson')); }
           }
           return;
         }
-        if (e.code === 'KeyN') { eDef = structuredClone(DEFAULT_ARENA); rebuildEditor(); eSay('БАЗОВАЯ АРЕНА ЗАГРУЖЕНА'); return; }
+        if (e.code === 'KeyN') { eDef = structuredClone(DEFAULT_ARENA); rebuildEditor(); eSay(t('ed.defaultLoaded')); return; }
         if (e.code === 'Minus' || e.code === 'Equal' || e.code === 'NumpadSubtract' || e.code === 'NumpadAdd') {
           const grow = e.code === 'Equal' || e.code === 'NumpadAdd';
           const ns = Math.max(16, Math.min(40, eDef.size + (grow ? 2 : -2)));
-          if (ns === eDef.size) { eSay(grow ? 'БОЛЬШЕ НЕКУДА (40)' : 'МЕНЬШЕ НЕКУДА (16)'); return; }
+          if (ns === eDef.size) { eSay(t(grow ? 'ed.maxSize' : 'ed.minSize')); return; }
           eDef.size = ns;
           // всё, что вылезло за новые стены, срезаем
           const B = ns - 2;
@@ -1196,47 +1253,52 @@ export const doom: MiniGame3D = {
           const now =
             eDef.pillars.length + eDef.torches.length + eDef.seals.length + eDef.pickups.length;
           rebuildEditor();
-          eSay(`РАЗМЕР ${ns * 2}×${ns * 2}${dropped > now ? ` · СРЕЗАНО ОБЪЕКТОВ: ${dropped - now}` : ''}`);
+          eSay(t('ed.size', ns * 2) + (dropped > now ? t('ed.sizeCut', dropped - now) : ''));
           return;
         }
         if (e.code === 'KeyB') {
           eDef.sky = eDef.sky === 'hell' ? 'dusk' : eDef.sky === 'dusk' ? 'day' : eDef.sky === 'day' ? 'void' : 'hell';
           applySky(eDef.sky);
           eSaveLocal();
-          eSay(`НЕБО: ${eDef.sky === 'hell' ? 'ПЕКЛО' : eDef.sky === 'dusk' ? 'ЗАКАТ' : eDef.sky === 'day' ? 'ДЕНЬ' : 'КВЕЙК'}`);
+          eSay(t('ed.sky', skyName(eDef.sky)));
           return;
         }
         if (e.code === 'KeyK') {
           if (document.pointerLockElement) document.exitPointerLock?.();
-          const nm = (window.prompt('Имя арены (до 24 символов):', arenaLabel() === 'ЧЕРНЕТКА' ? '' : arenaLabel()) ?? '').trim().slice(0, 24);
+          const cur = arenaLabel();
+          const nm = (window.prompt(t('ed.namePrompt'), cur === t('arena.draft') ? '' : cur) ?? '').trim().slice(0, 24);
           if (!nm) return;
-          if (nm === 'БАЗОВА' || nm === 'ЧЕРНЕТКА' || BUILTIN_ARENAS.some((b) => b.name === nm)) { eSay('ЭТО ИМЯ ЗАНЯТО'); return; }
+          if (reservedArenaNames().has(nm)) { eSay(t('ed.nameTaken')); return; }
           const st = loadStore();
           st[nm] = structuredClone(eDef);
           saveStore(st);
           try { localStorage.setItem('fw_arena_use', `u:${nm}`); } catch { /* noop */ }
-          eSay(`СОХРАНЕНО: ${nm}`);
+          eSay(t('ed.saved', nm));
           return;
         }
         if (e.code === 'KeyL') {
           if (document.pointerLockElement) document.exitPointerLock?.();
           const st = loadStore();
-          const names = ['БАЗОВА', ...BUILTIN_ARENAS.map((b) => b.name), ...Object.keys(st)];
-          const t = (window.prompt(`Есть: ${names.join(', ')}\nИмя — загрузить, «-имя» — удалить:`) ?? '').trim();
-          if (!t) return;
-          if (t.startsWith('-')) {
-            const nm = t.slice(1).trim();
-            if (st[nm]) { delete st[nm]; saveStore(st); eSay(`УДАЛЕНО: ${nm}`); }
-            else eSay('ТАКОЙ СВОЕЙ АРЕНЫ НЕТ');
+          // в списке — ЯРЛЫКИ на языке интерфейса, а искать умеем и по ним,
+          // и по собственным именам встроенных: старая подсказка не должна
+          // перестать работать после смены языка
+          const names = [t('arena.default'), ...BUILTIN_ARENAS.map((_, i) => builtinLabel(i)), ...Object.keys(st)];
+          const typed = (window.prompt(t('ed.loadPrompt', names.join(', '))) ?? '').trim();
+          if (!typed) return;
+          if (typed.startsWith('-')) {
+            const nm = typed.slice(1).trim();
+            if (st[nm]) { delete st[nm]; saveStore(st); eSay(t('ed.deleted', nm)); }
+            else eSay(t('ed.noSuchOwn'));
             return;
           }
-          const bi = BUILTIN_ARENAS.findIndex((b) => b.name === t);
-          const def = t === 'БАЗОВА' ? DEFAULT_ARENA : bi >= 0 ? BUILTIN_ARENAS[bi].def : st[t];
-          if (!def) { eSay('НЕ НАШЁЛ ТАКУЮ АРЕНУ'); return; }
+          const bi = BUILTIN_ARENAS.findIndex((b, i) => b.name === typed || builtinLabel(i) === typed);
+          const def = typed === t('arena.default') || typed === 'БАЗОВА' ? DEFAULT_ARENA
+            : bi >= 0 ? BUILTIN_ARENAS[bi].def : st[typed];
+          if (!def) { eSay(t('ed.notFound')); return; }
           eDef = structuredClone(def);
           rebuildEditor();
           applySky(eDef.sky);
-          eSay(`ЗАГРУЖЕНО: ${t}`);
+          eSay(t('ed.loaded', typed));
           return;
         }
       }
@@ -1547,7 +1609,9 @@ export const doom: MiniGame3D = {
     // ЛКМ ставит, ПКМ/X убирает, 0-9 и колесо выбирают слот. Правки сразу
     // пересобирают арену (bakeStatic дёшев) и автосохраняются в localStorage.
     interface ESlot {
-      name: string; r: number; rz?: number; h: number;
+      /** ключ словаря, а не готовая подпись: язык меняется прямо в титуле */
+      name: string;
+      r: number; rz?: number; h: number;
       kind: 'pillar' | 'torch' | 'seal' | 'start' | 'med' | 'arm' | 'bul' | 'shl' | 'box';
       /** тип структуры для kind=pillar */
       pk?: 'block' | 'obelisk' | 'wall' | 'pyramid' | 'rubble' | 'column' | 'steps' | 'rock' | 'statue' | 'dais';
@@ -1556,59 +1620,59 @@ export const doom: MiniGame3D = {
     // колесо мыши листает ВСЕ варианты подряд, T поворачивает прямоугольные.
     const E_GROUPS: { name: string; items: ESlot[] }[] = [
       {
-        name: 'СТЕНА', items: [
-          { name: 'СТЕНА', r: 2.5, rz: 0.7, h: 4.4, kind: 'pillar', pk: 'wall' },
-          { name: 'ДЛИННАЯ', r: 4, rz: 0.7, h: 4.4, kind: 'pillar', pk: 'wall' },
-          { name: 'КОРОТКАЯ', r: 1.5, rz: 0.7, h: 4.4, kind: 'pillar', pk: 'wall' },
+        name: 'ed.g.wall', items: [
+          { name: 'ed.i.wall', r: 2.5, rz: 0.7, h: 4.4, kind: 'pillar', pk: 'wall' },
+          { name: 'ed.i.wall_long', r: 4, rz: 0.7, h: 4.4, kind: 'pillar', pk: 'wall' },
+          { name: 'ed.i.wall_short', r: 1.5, rz: 0.7, h: 4.4, kind: 'pillar', pk: 'wall' },
         ],
       },
       {
-        name: 'КОЛОННА', items: [
-          { name: 'ПИЛОН', r: 1.6, h: 5, kind: 'pillar', pk: 'block' },
-          { name: 'ПИЛОН+', r: 2.2, h: 5, kind: 'pillar', pk: 'block' },
-          { name: 'КОЛОННА', r: 1.4, h: 6.9, kind: 'pillar', pk: 'column' },
-          { name: 'ОБЕЛИСК', r: 1.2, h: 11.5, kind: 'pillar', pk: 'obelisk' },
-          { name: 'СТАТУЯ', r: 1.3, h: 5.9, kind: 'pillar', pk: 'statue' },
+        name: 'ed.g.column', items: [
+          { name: 'ed.i.pillar', r: 1.6, h: 5, kind: 'pillar', pk: 'block' },
+          { name: 'ed.i.pillar_big', r: 2.2, h: 5, kind: 'pillar', pk: 'block' },
+          { name: 'ed.i.column', r: 1.4, h: 6.9, kind: 'pillar', pk: 'column' },
+          { name: 'ed.i.obelisk', r: 1.2, h: 11.5, kind: 'pillar', pk: 'obelisk' },
+          { name: 'ed.i.statue', r: 1.3, h: 5.9, kind: 'pillar', pk: 'statue' },
         ],
       },
       {
-        name: 'ПЛАТФОРМЫ', items: [
-          { name: 'СТУПЕНИ', r: 2.2, rz: 1.6, h: 1.7, kind: 'pillar', pk: 'steps' },
-          { name: 'ШИРОКИЕ', r: 3.6, rz: 1.6, h: 1.7, kind: 'pillar', pk: 'steps' },
+        name: 'ed.g.platform', items: [
+          { name: 'ed.i.steps', r: 2.2, rz: 1.6, h: 1.7, kind: 'pillar', pk: 'steps' },
+          { name: 'ed.i.steps_wide', r: 3.6, rz: 1.6, h: 1.7, kind: 'pillar', pk: 'steps' },
           // проходимые: на них можно зайти, монстры карабкаются следом
-          { name: 'ПЛАТФОРМА', r: 4.2, rz: 3.4, h: 1.0, kind: 'pillar', pk: 'dais' },
-          { name: 'ПЛОЩАДКА', r: 2.6, h: 1.0, kind: 'pillar', pk: 'dais' },
+          { name: 'ed.i.dais', r: 4.2, rz: 3.4, h: 1.0, kind: 'pillar', pk: 'dais' },
+          { name: 'ed.i.pad', r: 2.6, h: 1.0, kind: 'pillar', pk: 'dais' },
         ],
       },
       {
-        name: 'ПИРАМИДА', items: [
-          { name: 'ПИРАМИДА', r: 6, h: 9, kind: 'pillar', pk: 'pyramid' },
-          { name: 'ВЕЛИКАЯ', r: 9, h: 13, kind: 'pillar', pk: 'pyramid' },
+        name: 'ed.g.pyramid', items: [
+          { name: 'ed.i.pyramid', r: 6, h: 9, kind: 'pillar', pk: 'pyramid' },
+          { name: 'ed.i.pyramid_great', r: 9, h: 13, kind: 'pillar', pk: 'pyramid' },
         ],
       },
       {
-        name: 'ОБЛОМКИ', items: [
-          { name: 'РАЗВАЛ', r: 3, rz: 1.6, h: 2.4, kind: 'pillar', pk: 'rubble' },
-          { name: 'КАМНИ', r: 1.4, h: 1.7, kind: 'pillar', pk: 'rock' },
-          { name: 'ГЛЫБА', r: 0.8, h: 1.3, kind: 'pillar', pk: 'rock' },
+        name: 'ed.g.rubble', items: [
+          { name: 'ed.i.rubble', r: 3, rz: 1.6, h: 2.4, kind: 'pillar', pk: 'rubble' },
+          { name: 'ed.i.rocks', r: 1.4, h: 1.7, kind: 'pillar', pk: 'rock' },
+          { name: 'ed.i.boulder', r: 0.8, h: 1.3, kind: 'pillar', pk: 'rock' },
         ],
       },
-      { name: 'ФАКЕЛ', items: [{ name: 'ФАКЕЛ', r: 0.6, h: 3.9, kind: 'torch' }] },
-      { name: 'ПЕЧАТЬ', items: [{ name: 'ПЕЧАТЬ', r: 2.0, h: 0.3, kind: 'seal' }] },
+      { name: 'ed.g.torch', items: [{ name: 'ed.i.torch', r: 0.6, h: 3.9, kind: 'torch' }] },
+      { name: 'ed.g.seal', items: [{ name: 'ed.i.seal', r: 2.0, h: 0.3, kind: 'seal' }] },
       {
-        name: 'ЗДОРОВЬЕ', items: [
-          { name: 'АПТЕЧКА', r: 0.6, h: 0.9, kind: 'med' },
-          { name: 'БРОНЯ', r: 0.6, h: 0.9, kind: 'arm' },
+        name: 'ed.g.health', items: [
+          { name: 'ed.i.med', r: 0.6, h: 0.9, kind: 'med' },
+          { name: 'ed.i.arm', r: 0.6, h: 0.9, kind: 'arm' },
         ],
       },
       {
-        name: 'ПАТРОНЫ', items: [
-          { name: 'ПАТРОНЫ', r: 0.6, h: 0.9, kind: 'bul' },
-          { name: 'ДРОБЬ', r: 0.6, h: 0.9, kind: 'shl' },
-          { name: 'ЯЩИК', r: 0.6, h: 0.9, kind: 'box' },
+        name: 'ed.g.ammo', items: [
+          { name: 'ed.i.bul', r: 0.6, h: 0.9, kind: 'bul' },
+          { name: 'ed.i.shl', r: 0.6, h: 0.9, kind: 'shl' },
+          { name: 'ed.i.box', r: 0.6, h: 0.9, kind: 'box' },
         ],
       },
-      { name: 'СТАРТ', items: [{ name: 'СТАРТ', r: 0.6, h: 1.9, kind: 'start' }] },
+      { name: 'ed.g.start', items: [{ name: 'ed.i.start', r: 0.6, h: 1.9, kind: 'start' }] },
     ];
     let gSel = 0;
     const vSel: number[] = E_GROUPS.map(() => 0);
@@ -1690,7 +1754,7 @@ export const doom: MiniGame3D = {
       eX = eDef.start.x; eY = 9; eZ = Math.min(eDef.size - 2, eDef.start.z + 10);
       eYaw = 0; ePitch = -0.55;
       startMarker.visible = true;
-      eSay('РЕДАКТОР: ЛКМ — поставить, ПКМ — убрать, G — тест');
+      eSay(t('ed.hello'));
     };
     const exitEditorToTitle = () => {
       ghost.visible = false; wire.visible = false; startMarker.visible = false;
@@ -1705,7 +1769,7 @@ export const doom: MiniGame3D = {
       if (document.pointerLockElement) document.exitPointerLock?.();
     };
     const testPlayFromEditor = () => {
-      if (eDef.seals.length < 2) { eSay('МИНИМУМ ДВЕ ПЕЧАТИ СПАВНА'); return; }
+      if (eDef.seals.length < 2) { eSay(t('ed.needTwoSeals')); return; }
       try {
         localStorage.setItem('fw_arena_draft', JSON.stringify(eDef));
         localStorage.setItem('fw_arena_use', 'draft');
@@ -1730,7 +1794,7 @@ export const doom: MiniGame3D = {
     };
     const arenaLabel = (): string => {
       const cur = localStorage.getItem('fw_arena_use') ?? 'default';
-      return arenaOptions().find((o) => o.token === cur)?.label ?? 'БАЗОВА';
+      return arenaOptions().find((o) => o.token === cur)?.label ?? t('arena.default');
     };
 
     /** пересечение квадратных следов: занято ли место (x,z,r) чем-то из eDef */
@@ -1864,7 +1928,7 @@ export const doom: MiniGame3D = {
         if (eAim && !eFound && eAim.ok) {
           const c = eCounts();
           if (sl.kind === 'pillar') {
-            if (c.pillars >= ARENA_CAPS.pillars) eSay(`ПИЛОНОВ НЕ БОЛЬШЕ ${ARENA_CAPS.pillars}`);
+            if (c.pillars >= ARENA_CAPS.pillars) eSay(t('ed.capPillars', ARENA_CAPS.pillars));
             else {
               eDef.pillars.push(
                 sl.pk === 'block' && !eRot
@@ -1874,20 +1938,20 @@ export const doom: MiniGame3D = {
               rebuildEditor();
             }
           } else if (sl.kind === 'torch') {
-            if (c.torches >= ARENA_CAPS.torches) eSay(`ФАКЕЛОВ НЕ БОЛЬШЕ ${ARENA_CAPS.torches}`);
+            if (c.torches >= ARENA_CAPS.torches) eSay(t('ed.capTorches', ARENA_CAPS.torches));
             else { eDef.torches.push({ x: eAim.x, z: eAim.z }); rebuildEditor(); }
           } else if (sl.kind === 'seal') {
-            if (c.seals >= ARENA_CAPS.seals) eSay(`ПЕЧАТЕЙ НЕ БОЛЬШЕ ${ARENA_CAPS.seals}`);
+            if (c.seals >= ARENA_CAPS.seals) eSay(t('ed.capSeals', ARENA_CAPS.seals));
             else { eDef.seals.push({ x: eAim.x, z: eAim.z }); rebuildEditor(); }
           } else if (sl.kind === 'start') {
             eDef.start = { x: eAim.x, z: eAim.z };
             startMarker.position.set(eAim.x, 0, eAim.z);
             eSaveLocal();
           } else {
-            if (c.pickups >= ARENA_CAPS.pickups) eSay(`ПРЕДМЕТОВ НЕ БОЛЬШЕ ${ARENA_CAPS.pickups}`);
+            if (c.pickups >= ARENA_CAPS.pickups) eSay(t('ed.capPickups', ARENA_CAPS.pickups));
             else { eDef.pickups.push({ kind: sl.kind, x: eAim.x, z: eAim.z }); rebuildEditor(); }
           }
-        } else if (eFound) eSay('ЗАНЯТО — СНАЧАЛА УБЕРИ (ПКМ)');
+        } else if (eFound) eSay(t('ed.occupied'));
       }
       if (eClickR) {
         eClickR = false;
@@ -2016,14 +2080,14 @@ export const doom: MiniGame3D = {
       cell(u * 2, u * 17);
       g.textAlign = 'center';
       g.fillStyle = '#c8a0a0'; g.font = FONT(10);
-      g.fillText('ЗДОРОВЬЕ', u * 10.5, lblY);
+      g.fillText(t('hud.health'), u * 10.5, lblY);
       g.fillStyle = hp > 40 ? '#e8c840' : Math.floor(time * 6) % 2 === 0 ? '#ff4030' : '#a01c18';
       g.font = FONT(numF);
       g.fillText(`${Math.ceil(hp)}%`, u * 10.5, numY);
       // ПАТРОНЫ
       cell(u * 21, u * 15);
       g.fillStyle = '#c8a0a0'; g.font = FONT(10);
-      g.fillText('ПАТРОНЫ', u * 28.5, lblY);
+      g.fillText(t('hud.ammo'), u * 28.5, lblY);
       g.fillStyle = '#e8c840'; g.font = FONT(numF);
       g.fillText(`${ammo[WEAPONS[weapon].ammo]}`, u * 28.5, numY);
       // ЛИЦО
@@ -2032,13 +2096,13 @@ export const doom: MiniGame3D = {
       // БРОНЯ
       cell(u * 64, u * 15);
       g.fillStyle = '#c8a0a0'; g.font = FONT(10);
-      g.fillText('БРОНЯ', u * 71.5, lblY);
+      g.fillText(t('hud.armor'), u * 71.5, lblY);
       g.fillStyle = '#60a0ff'; g.font = FONT(numF);
       g.fillText(`${Math.ceil(armor)}%`, u * 71.5, numY);
       // ОРУЖИЕ + ДЕНЬГИ
       cell(u * 81, u * 17);
       g.fillStyle = '#c8a0a0'; g.font = FONT(10);
-      g.fillText('ОРУЖИЕ · ОЧКИ', u * 89.5, lblY);
+      g.fillText(t('hud.weapons'), u * 89.5, lblY);
       for (let i = 0; i < 3; i++) {
         g.fillStyle = owned[i] ? (i === weapon ? '#e8c840' : '#8a7a40') : '#3a2a26';
         g.fillRect(u * 84.2 + i * u * 3.8, lblY + 7, u * 3, 6);
@@ -2069,7 +2133,7 @@ export const doom: MiniGame3D = {
         ['файерболы', `${balls.length}/${BALL_MAX}`, false],
         ['ракеты', `${rockets.length}/${RKT_MAX} · ${ammo.rkt} шт`, false],
         ['волна / бюджет', `${wave} / ${waveBudget}`, false],
-        ['режим', `${D.name} · потолок ${D.cap}`, false],
+        ['режим', `${dName(D)} · потолок ${D.cap}`, false],
       ];
       const pad = 8, lh = 15, w = 208;
       const h = rows.length * lh + pad * 2;
@@ -2107,23 +2171,23 @@ export const doom: MiniGame3D = {
 
       // шапка
       g.textAlign = 'left';
-      fitFont(g, 'РЕДАКТОР АРЕНЫ', W * 0.4, 22, FAM);
+      const edTitle = t('ed.title');
+      fitFont(g, edTitle, W * 0.4, 22, FAM);
       g.fillStyle = '#e8c840';
-      g.fillText('РЕДАКТОР АРЕНЫ', 14, 30);
+      g.fillText(edTitle, 14, 30);
       const c = eCounts();
       g.font = '12px ui-monospace, monospace';
       g.fillStyle = '#a07a6a';
       g.fillText(
-        `пилоны ${c.pillars}/${ARENA_CAPS.pillars} · факелы ${c.torches}/${ARENA_CAPS.torches}` +
-        ` · печати ${c.seals}/${ARENA_CAPS.seals} · предметы ${c.pickups}/${ARENA_CAPS.pickups}` +
-        ` · размер ${eDef.size * 2}×${eDef.size * 2}` +
-        ` · небо: ${eDef.sky === 'hell' ? 'ПЕКЛО' : eDef.sky === 'dusk' ? 'ЗАКАТ' : eDef.sky === 'day' ? 'ДЕНЬ' : 'КВЕЙК'}` +
-        ` · пол: ${(eDef.ground ?? 'checker') === 'checker' ? 'ШАХМАТКА' : eDef.ground === 'sand' ? 'ПЕСОК' : eDef.ground === 'sand_road' ? 'ПЕСОК+ДОРОГА' : eDef.ground === 'stone' ? 'КАМЕНЬ' : 'БРУСЧАТКА'}`,
+        t('ed.counts',
+          c.pillars, ARENA_CAPS.pillars, c.torches, ARENA_CAPS.torches,
+          c.seals, ARENA_CAPS.seals, c.pickups, ARENA_CAPS.pickups,
+          eDef.size * 2, skyName(eDef.sky), groundName(eDef.ground)),
         14, 48,
       );
       if (c.seals < 2) {
         g.fillStyle = '#ff5a3a';
-        g.fillText('нужно минимум 2 печати спавна, иначе тест не запустится', 14, 64);
+        g.fillText(t('ed.needSeals'), 14, 64);
       }
 
       // хотбар: ячейка = категория, внутри — текущий вариант и счётчик «в/из»
@@ -2150,22 +2214,21 @@ export const doom: MiniGame3D = {
         }
         g.textAlign = 'center';
         g.fillStyle = sel ? '#a08a60' : '#6a564a';
-        g.font = '9px ui-monospace, monospace';
-        g.fillText(grp.name, x + sw / 2, y0 + 22);
-        fitFont(g, it.name, sw - 6, 12, FAM);
+        // категория подписана мелко: имена длинные, а ячейка узкая
+        fitFont(g, t(grp.name), sw - 6, 9, MONO, 7);
+        g.fillText(t(grp.name), x + sw / 2, y0 + 22);
+        fitFont(g, t(it.name), sw - 6, 12, FAM);
         g.fillStyle = sel ? '#e8c840' : '#9a8060';
-        g.fillText(it.name, x + sw / 2, y0 + sh - 8);
+        g.fillText(t(it.name), x + sw / 2, y0 + sh - 8);
       }
 
-      // подсказки
+      // подсказки: строка длинная и в другом языке длиннее — подбираем размер,
+      // иначе концы уезжают за края экрана
       g.textAlign = 'center';
-      g.font = '11px ui-monospace, monospace';
       g.fillStyle = '#7a5a50';
-      g.fillText(
-        'ЛКМ поставить · ПКМ/X убрать · цифра — категория (повтор листает) · колесо — все варианты · T поворот 45°' +
-        ' · WASD+SPACE/SHIFT полёт (R быстрее) · −/+ размер · B небо · F пол · G тест · Q титул · K/L сохранить/загрузить · E/I экспорт/импорт',
-        W / 2, y0 - 10,
-      );
+      const help = t('ed.help');
+      fitFont(g, help, W - 24, 11, MONO, 6);
+      g.fillText(help, W / 2, y0 - 10);
       if (eMsgT > 0) {
         fitFont(g, eMsg, W * 0.8, 18, FAM);
         g.fillStyle = '#ff8a30';
@@ -2296,14 +2359,25 @@ export const doom: MiniGame3D = {
           g.fillRect(W / 2 + p.x - sz / 2, p.y - sz / 2, sz, sz);
         }
         g.restore();
-        fitFont(g, 'ТРИМАЙ ПОРТ · ХВИЛЯ ЗА ХВИЛЕЮ', W * 0.8, 15, FAM);
+        // «ФАЄРВОЛ» не переводится никогда, но чужому глазу оно ничего не
+        // говорит — в английском под названием идёт мелкая расшифровка
+        let subY = titleY + 34;
+        const nameEn = t('title.name_en');
+        if (nameEn) {
+          fitFont(g, nameEn, W * 0.6, 20, FAM);
+          g.fillStyle = '#a05a2a';
+          g.fillText(nameEn, W / 2, titleY + 24);
+          subY = titleY + 50;
+        }
+        const sub = t('title.sub');
+        fitFont(g, sub, W * 0.8, 15, FAM);
         g.fillStyle = '#c88a5a';
-        g.fillText('ТРИМАЙ ПОРТ · ХВИЛЯ ЗА ХВИЛЕЮ', W / 2, H * 0.24 + 34);
+        g.fillText(sub, W / 2, subY);
         if (best[D.key] > 0) {
-          const rec = `РЕКОРД · ${D.name} · ${best[D.key]}`;
+          const rec = t('title.best', dName(D), best[D.key]);
           fitFont(g, rec, W * 0.7, 16, FAM);
           g.fillStyle = '#7bd88f';
-          g.fillText(rec, W / 2, H * 0.24 + 60);
+          g.fillText(rec, W / 2, subY + 26);
         }
         const menu = titleMenu();
         const step = menu.length >= 5 ? 48 : 58;
@@ -2332,13 +2406,15 @@ export const doom: MiniGame3D = {
             g.fillStyle = '#140808'; g.fillRect(sx - 3, sy + 8, 2, 5); g.fillRect(sx + 1, sy + 8, 2, 5);
           }
         }
-        fitFont(g, mob ? 'ТАП ПО ПУНКТУ' : '↑↓ ВЫБОР · ENTER / SPACE — СТАРТ', W * 0.8, 13, FAM);
+        const how = t(mob ? 'title.tap' : 'title.keys');
+        fitFont(g, how, W * 0.8, 13, FAM);
         g.fillStyle = '#7a5a50';
-        g.fillText(mob ? 'ТАП ПО ПУНКТУ' : '↑↓ ВЫБОР · ENTER / SPACE — СТАРТ', W / 2, H * 0.82);
+        g.fillText(how, W / 2, H * 0.82);
         if (warpDigits !== null) {               // набран IDCLEV — ждём две цифры волны
-          fitFont(g, `IDCLEV ${warpDigits}▂`, W * 0.4, 13, FAM);
+          const warp = t('title.idclev', warpDigits);
+          fitFont(g, warp, W * 0.4, 13, FAM);
           g.fillStyle = '#7bd88f';
-          g.fillText(`IDCLEV ${warpDigits}▂`, W / 2, H * 0.88);
+          g.fillText(warp, W / 2, H * 0.88);
         }
         g.textAlign = 'left';
         return;
@@ -2347,12 +2423,13 @@ export const doom: MiniGame3D = {
       // «РАКЕТНИЦА» — короткая плашка сразу после подбора
       if (launcherMsg > 0 && (phase === 'wave' || phase === 'clear')) {
         g.textAlign = 'center';
-        fitFont(g, 'РАКЕТНИЦА — КЛАВИША 4', W * 0.7, 26, FAM);
+        const got = t('hud.rkt'), warn = t('hud.rkt.warn');
+        fitFont(g, got, W * 0.7, 26, FAM);
         g.fillStyle = '#ff8a30';
-        g.fillText('РАКЕТНИЦА — КЛАВИША 4', W / 2, H * 0.34);
-        fitFont(g, 'ОСКОЛКИ БЬЮТ И ПО ТЕБЕ — НЕ СТРЕЛЯЙ В УПОР', W * 0.7, 14, FAM);
+        g.fillText(got, W / 2, H * 0.34);
+        fitFont(g, warn, W * 0.7, 14, FAM);
         g.fillStyle = '#c88a5a';
-        g.fillText('ОСКОЛКИ БЬЮТ И ПО ТЕБЕ — НЕ СТРЕЛЯЙ В УПОР', W / 2, H * 0.34 + 24);
+        g.fillText(warn, W / 2, H * 0.34 + 24);
         g.textAlign = 'left';
       }
 
@@ -2433,24 +2510,24 @@ export const doom: MiniGame3D = {
       // счётчик волны сверху
       g.textAlign = 'left';
       g.fillStyle = '#e8c840'; g.font = FONT(15);
-      g.fillText(`ВОЛНА ${wave}`, 16, 26);
+      g.fillText(t('hud.wave', wave), 16, 26);
       g.fillStyle = '#c88a5a'; g.font = FONT(12);
-      g.fillText(`ТВАРЕЙ: ${alive}`, 16, 46);
+      g.fillText(t('hud.alive', alive), 16, 46);
       g.textAlign = 'right';
       g.fillStyle = '#c8a0a0'; g.font = FONT(12);
-      g.fillText(`ЗА ВОЛНУ +${waveScore(wave)}`, W - 16, 26);
-      g.fillText(`УБИТО: ${totalKills}`, W - 16, 46);
+      g.fillText(t('hud.perWave', waveScore(wave)), W - 16, 26);
+      g.fillText(t('hud.kills', totalKills), W - 16, 46);
       g.textAlign = 'left';
 
       // баннеры
       if (phase === 'wave' && phaseT < 2) {
         g.textAlign = 'center';
-        const t1 = wave % 5 === 0 ? `ВОЛНА ${wave} — НАПЛЫВ БОМБИСТОВ!` : `ВОЛНА ${wave}`;
+        const t1 = t(wave % 5 === 0 ? 'hud.rush' : 'hud.wave', wave);
         if (D.key !== 'norm') {                       // на какой сложности идёт забег
           g.save();
-          fitFont(g, D.name, W * 0.4, 15, FAM);
+          fitFont(g, dName(D), W * 0.4, 15, FAM);
           g.fillStyle = D.col;
-          g.fillText(D.name, W / 2, H * 0.2);
+          g.fillText(dName(D), W / 2, H * 0.2);
           g.restore();
         }
         fitFont(g, t1, W * 0.86, 40, FAM);
@@ -2465,26 +2542,28 @@ export const doom: MiniGame3D = {
       }
       if (phase === 'clear') {
         g.textAlign = 'center';
-        fitFont(g, 'ВОЛНА ЗАЧИЩЕНА', W * 0.8, 34, FAM);
+        const done = t('hud.cleared');
+        fitFont(g, done, W * 0.8, 34, FAM);
         g.fillStyle = '#7bd88f';
-        g.fillText('ВОЛНА ЗАЧИЩЕНА', W / 2, H * 0.3);
-        fitFont(g, `ОЧКИ +${waveScore(wave)}`, W * 0.6, 22, FAM);
+        g.fillText(done, W / 2, H * 0.3);
+        const paid = t('hud.score', waveScore(wave));
+        fitFont(g, paid, W * 0.6, 22, FAM);
         g.fillStyle = '#e8c840';
-        g.fillText(`ОЧКИ +${waveScore(wave)}`, W / 2, H * 0.3 + 32);
-        fitFont(g, `следующая волна через ${Math.ceil(Math.max(0, 4 - phaseT))}…`, W * 0.6, 14, FAM);
+        g.fillText(paid, W / 2, H * 0.3 + 32);
+        const next = t('hud.next', Math.ceil(Math.max(0, 4 - phaseT)));
+        fitFont(g, next, W * 0.6, 14, FAM);
         g.fillStyle = '#c88a5a';
-        g.fillText(`следующая волна через ${Math.ceil(Math.max(0, 4 - phaseT))}…`, W / 2, H * 0.3 + 58);
+        g.fillText(next, W / 2, H * 0.3 + 58);
         g.textAlign = 'left';
       }
 
       // подсказка управления в начале забега
       if (!mob && wave === 1 && phaseT < 7 && phase === 'wave') {
         g.textAlign = 'center';
-        const t = locked ? 'WASD — ХОД · МЫШЬ — ОБЗОР · КЛИК — ОГОНЬ · 1/2/3 — ОРУЖИЕ'
-          : 'КЛИКНИ ДЛЯ ЗАХВАТА МЫШИ · ИЛИ КЛАССИКА: ←→ ПОВОРОТ, ↑↓ ХОД, SPACE — ОГОНЬ';
-        fitFont(g, t, W * 0.92, 14, FAM);
+        const tip = t(locked ? 'hud.tip.locked' : 'hud.tip.free');
+        fitFont(g, tip, W * 0.92, 14, FAM);
         g.fillStyle = 'rgba(232,200,64,0.75)';
-        g.fillText(t, W / 2, H - Math.min(78, H * 0.16) - 18);
+        g.fillText(tip, W / 2, H - Math.min(78, H * 0.16) - 18);
         g.textAlign = 'left';
       }
 
@@ -2492,7 +2571,7 @@ export const doom: MiniGame3D = {
       if (touch && (phase === 'wave' || phase === 'clear')) {
         const L = tLayout();
         // стики
-        for (const [c, v, lbl] of [[L.moveC, tMove, 'ХОД'], [L.lookC, tLook, 'ОБЗОР']] as const) {
+        for (const [c, v, lbl] of [[L.moveC, tMove, t('hud.move')], [L.lookC, tLook, t('hud.look')]] as const) {
           g.beginPath(); g.arc(c.x, c.y, L.r, 0, Math.PI * 2);
           g.fillStyle = 'rgba(255,255,255,0.05)'; g.fill();
           g.strokeStyle = 'rgba(232,200,64,0.25)'; g.lineWidth = 2; g.stroke();
@@ -2502,7 +2581,7 @@ export const doom: MiniGame3D = {
           g.fillText(lbl, c.x, c.y - L.r - 8);
           g.textAlign = 'left';
         }
-        drawButton(g, L.fire.x, L.fire.y, L.fire.r, 'ОГОНЬ', tFire, '#ff6030');
+        drawButton(g, L.fire.x, L.fire.y, L.fire.r, t('hud.fire'), tFire, '#ff6030');
         drawButton(g, L.wpn.x, L.wpn.y, L.wpn.r, `${weapon + 1}`, false, '#e8c840');
         void bh;
       }
@@ -2512,32 +2591,34 @@ export const doom: MiniGame3D = {
         g.fillStyle = 'rgba(60,6,6,0.55)'; g.fillRect(0, 0, W, H);
         g.textAlign = 'center';
         g.save();
-        fitFont(g, 'ТЕБЯ РАЗОРВАЛИ', W * 0.86, 42, FAM);
+        const died = t('dead.title');
+        fitFont(g, died, W * 0.86, 42, FAM);
         g.shadowColor = 'rgba(255,40,20,0.9)'; g.shadowBlur = 24;
         g.fillStyle = '#ff4030';
-        g.fillText('ТЕБЯ РАЗОРВАЛИ', W / 2, H * 0.26);
+        g.fillText(died, W / 2, H * 0.26);
         g.restore();
         fitFont(g, `${score}`, W * 0.6, 46, FAM);
         g.fillStyle = '#7bd88f';
         g.fillText(`${score}`, W / 2, H * 0.26 + 56);
-        const sub = `волн пройдено: ${Math.max(0, wave - 1)} · твари: ${totalKills}`;
+        const sub = t('dead.sub', Math.max(0, wave - 1), totalKills);
         fitFont(g, sub, W * 0.8, 15, FAM);
         g.fillStyle = '#c8a0a0';
         g.fillText(sub, W / 2, H * 0.26 + 84);
-        const rec = cheated ? 'РЕКОРД НЕ ЗАСЧИТАН — БЫЛ ПРЫЖОК ПО ВОЛНАМ'
-          : newRecord ? 'НОВЫЙ РЕКОРД!'
-            : `РЕКОРД · ${D.name} · ${best[D.key]}`;
+        const rec = cheated ? t('dead.cheated')
+          : newRecord ? t('dead.record')
+            : t('title.best', dName(D), best[D.key]);
         fitFont(g, rec, W * 0.8, newRecord ? 24 : 16, FAM);
         // новый рекорд мигает золотом, обычная строка — спокойная зелёная
         g.fillStyle = cheated ? '#8a6a60'
           : newRecord ? (Math.floor(time * 4) % 2 ? '#e8c840' : '#fff0a0') : '#7bd88f';
         g.fillText(rec, W / 2, H * 0.26 + 112);
         const R = btnRects();
-        pixelBtn(R.again, 'Ещё раз', endSel === 0, '#e8c840');
-        pixelBtn(R.menu, 'В меню', endSel === 1, '#7bd88f');
-        fitFont(g, mob ? 'ТАП ПО КНОПКЕ' : 'КЛИК · ИЛИ ← / → И ENTER', W * 0.7, 13, FAM);
+        pixelBtn(R.again, t('dead.again'), endSel === 0, '#e8c840');
+        pixelBtn(R.menu, t('dead.menu'), endSel === 1, '#7bd88f');
+        const how = t(mob ? 'dead.tap' : 'dead.keys');
+        fitFont(g, how, W * 0.7, 13, FAM);
         g.fillStyle = '#8a6a60';
-        g.fillText(mob ? 'ТАП ПО КНОПКЕ' : 'КЛИК · ИЛИ ← / → И ENTER', W / 2, R.again.y + R.again.h + 34);
+        g.fillText(how, W / 2, R.again.y + R.again.h + 34);
         g.textAlign = 'left';
       }
 
@@ -2821,6 +2902,8 @@ export const doom: MiniGame3D = {
         if (lrEdge !== 0) {
           if (selAct === 'diff') { setDiff(diffIx + (lrEdge > 0 ? 1 : -1)); sfx.play('menuMove'); }
           else if (selAct === 'arena') { toggleArena(lrEdge > 0 ? 1 : -1); sfx.play('menuMove'); }
+          // языка два — в какую сторону ни листай, получится второй
+          else if (selAct === 'lang') { toggleLang(); sfx.play('menuMove'); }
         }
         const startNow = enterEdge || keys.has('Space') || (mob && pdEdge);
         if (startNow) {
@@ -2839,6 +2922,7 @@ export const doom: MiniGame3D = {
           const act = menu[titleSel].act;
           if (act === 'diff') setDiff(diffIx + 1);
           else if (act === 'arena') toggleArena();
+          else if (act === 'lang') toggleLang();
           else if (act === 'edit') enterEditor();
           else {
             music.play('main', { fade: 1.4 });   // из chill в бой с наложением
