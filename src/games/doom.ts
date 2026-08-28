@@ -1209,7 +1209,7 @@ export const doom: MiniGame3D = {
 
     // тач-раскладка
     const tLayout = () => {
-      const W = ctx.width, H = ctx.height;
+      const W = HW(), H = HH();
       const r = Math.max(52, Math.min(W, H) * 0.13);
       return {
         r,
@@ -1779,8 +1779,21 @@ export const doom: MiniGame3D = {
 
     // ── HUD ──
     const g = ctx.hud;
+    /**
+     * МАСШТАБ HUD. Рисуем в координатах базовой высоты 720 и растягиваем всё
+     * разом. Иначе на большом экране статус-бар и меню остаются мелкими:
+     * размеры-то заданы в пикселях, а их там вдвое-втрое больше. Godot-порт
+     * добивается того же режимом растяжения canvas_items.
+     * Всё, что сравнивает координаты указателя с версткой, обязано делить их
+     * на hs() — для этого есть pv().
+     */
+    const hs = () => Math.max(1, ctx.height / 720);
+    const HW = () => ctx.width / hs();
+    const HH = () => ctx.height / hs();
+    /** указатель в координатах HUD */
+    const pv = () => ({ x: ctx.input.pointer.x / hs(), y: ctx.input.pointer.y / hs() });
     const btnRects = () => {
-      const W = ctx.width, H = ctx.height;
+      const W = HW(), H = HH();
       const w = Math.min(230, W * 0.38), h = 48, gap = 22;
       return {
         cash: { x: W / 2 - w - gap / 2, y: H * 0.6, w, h },
@@ -1837,7 +1850,7 @@ export const doom: MiniGame3D = {
     };
 
     const drawStatusBar = () => {
-      const W = ctx.width, H = ctx.height;
+      const W = HW(), H = HH();
       const bh = Math.min(78, H * 0.16);
       const y0 = H - bh;
       // панель
@@ -1933,7 +1946,7 @@ export const doom: MiniGame3D = {
 
     /** HUD редактора: заголовок, счётчики, хотбар, подсказки */
     const drawEditorHud = () => {
-      const W = ctx.width, H = ctx.height;
+      const W = HW(), H = HH();
       drawSunFlare();
       // прицел
       g.strokeStyle = 'rgba(232,200,64,0.85)'; g.lineWidth = 2;
@@ -2020,7 +2033,7 @@ export const doom: MiniGame3D = {
       if (sky !== 'day') return;
       sunScreen.copy(SUN_POS).project(cam);
       if (sunScreen.z > 1) return;                       // солнце за спиной
-      const W = ctx.width, H = ctx.height;
+      const W = HW(), H = HH();
       const sx = (sunScreen.x * 0.5 + 0.5) * W;
       const sy = (-sunScreen.y * 0.5 + 0.5) * H;
       if (sx < -W * 0.3 || sx > W * 1.3 || sy < -H * 0.3 || sy > H * 1.3) return;
@@ -2049,7 +2062,14 @@ export const doom: MiniGame3D = {
     };
 
     const drawHud = () => {
-      const W = ctx.width, H = ctx.height;
+      const sc = hs();
+      g.save();
+      g.scale(sc, sc);
+      try { drawHudInner(); } finally { g.restore(); }
+    };
+
+    const drawHudInner = () => {
+      const W = HW(), H = HH();
       if (phase === 'edit') { drawEditorHud(); return; }
 
       // ── ТИТУЛ (красно-чёрный, курсор-череп) ──
@@ -2255,9 +2275,9 @@ export const doom: MiniGame3D = {
         const t1 = wave % 5 === 0 ? `ВОЛНА ${wave} — НАПЛЫВ БОМБИСТОВ!` : `ВОЛНА ${wave}`;
         if (D.key !== 'norm') {                       // на какой сложности идёт забег
           g.save();
-          fitFont(g, D.name, ctx.width * 0.4, 15, FAM);
+          fitFont(g, D.name, W * 0.4, 15, FAM);
           g.fillStyle = D.col;
-          g.fillText(D.name, ctx.width / 2, ctx.height * 0.2);
+          g.fillText(D.name, W / 2, H * 0.2);
           g.restore();
         }
         fitFont(g, t1, W * 0.86, 40, FAM);
@@ -2431,9 +2451,13 @@ export const doom: MiniGame3D = {
       let tmx = 0, tmy = 0, tlx = 0, tly = 0;
       if (touch) {
         const L = tLayout();
+        // раскладка теперь в координатах HUD, а касания приходят в пикселях экрана
+        const ts = hs();
+        const tX = (p: { x: number }) => p.x / ts;
+        const tY = (p: { y: number }) => p.y / ts;
         for (const p of touch.started) {
-          if (moveId < 0 && inCircle(p.x, p.y, L.moveC.x, L.moveC.y, L.r * 1.5)) moveId = p.id;
-          else if (lookId < 0 && inCircle(p.x, p.y, L.lookC.x, L.lookC.y, L.r * 1.5)) lookId = p.id;
+          if (moveId < 0 && inCircle(tX(p), tY(p), L.moveC.x, L.moveC.y, L.r * 1.5)) moveId = p.id;
+          else if (lookId < 0 && inCircle(tX(p), tY(p), L.lookC.x, L.lookC.y, L.r * 1.5)) lookId = p.id;
         }
         for (const p of touch.ended) {
           if (p.id === moveId) { moveId = -1; tMove = { x: 0, y: 0 }; }
@@ -2442,15 +2466,15 @@ export const doom: MiniGame3D = {
         tFire = false;
         for (const p of touch.active) {
           if (p.id === moveId) {
-            tMove.x = Math.max(-1, Math.min(1, (p.x - L.moveC.x) / (L.r * 0.85)));
-            tMove.y = Math.max(-1, Math.min(1, (p.y - L.moveC.y) / (L.r * 0.85)));
+            tMove.x = Math.max(-1, Math.min(1, (tX(p) - L.moveC.x) / (L.r * 0.85)));
+            tMove.y = Math.max(-1, Math.min(1, (tY(p) - L.moveC.y) / (L.r * 0.85)));
           } else if (p.id === lookId) {
-            tLook.x = Math.max(-1, Math.min(1, (p.x - L.lookC.x) / (L.r * 0.85)));
-            tLook.y = Math.max(-1, Math.min(1, (p.y - L.lookC.y) / (L.r * 0.85)));
-          } else if (inCircle(p.x, p.y, L.fire.x, L.fire.y, L.fire.r * 1.3)) tFire = true;
+            tLook.x = Math.max(-1, Math.min(1, (tX(p) - L.lookC.x) / (L.r * 0.85)));
+            tLook.y = Math.max(-1, Math.min(1, (tY(p) - L.lookC.y) / (L.r * 0.85)));
+          } else if (inCircle(tX(p), tY(p), L.fire.x, L.fire.y, L.fire.r * 1.3)) tFire = true;
         }
         for (const p of touch.started) {
-          if (inCircle(p.x, p.y, L.wpn.x, L.wpn.y, L.wpn.r * 1.3)) {
+          if (inCircle(tX(p), tY(p), L.wpn.x, L.wpn.y, L.wpn.r * 1.3)) {
             for (let i = 1; i <= 4; i++) {
               const nx = (weapon + i) % 4;
               if (owned[nx]) { weapon = nx; buildGun(nx); break; }
@@ -2494,10 +2518,10 @@ export const doom: MiniGame3D = {
           if (mob && pdEdge) {
             // тап по пункту: ближайшая строка меню
             const step = menu.length >= 5 ? 48 : 58;
-            const ty = ctx.input.pointer.y;
+            const ty = pv().y;
             let best = 0, bestD = 1e9;
             for (let i = 0; i < menu.length; i++) {
-              const d = Math.abs(ty - (ctx.height * 0.5 + i * step));
+              const d = Math.abs(ty - (HH() * 0.5 + i * step));
               if (d < bestD) { bestD = d; best = i; }
             }
             titleSel = best;
@@ -2565,8 +2589,9 @@ export const doom: MiniGame3D = {
         const R = btnRects();
         let go = -1;
         if (pdEdge) {
-          if (inRect(R.cash, ctx.input.pointer.x, ctx.input.pointer.y)) go = 0;
-          else if (inRect(R.work, ctx.input.pointer.x, ctx.input.pointer.y)) go = 1;
+          const pt = pv();
+          if (inRect(R.cash, pt.x, pt.y)) go = 0;
+          else if (inRect(R.work, pt.x, pt.y)) go = 1;
         } else if (enterEdge || keys.has('Space')) go = endSel;
         if (go === 0) { cleanup(); ctx.finish({ success: money > 0, score: money }); return; }
         if (go === 1) restart();
