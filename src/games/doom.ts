@@ -776,6 +776,16 @@ export const doom: MiniGame3D = {
     const godMode = qs.get('god') === '1';
     const botMode = qs.get('bot') === '1';
     const sfxLog = qs.get('sfxlog') === '1';
+    // ?spawn=x,z,yaw (yaw в градусах, по умолчанию 0) — откуда и куда смотрит
+    // боец в начале забега: сцену промо надо начинать с нужного места, а не с
+    // того, что записано в арене
+    const spawnFlag = (() => {
+      const raw = qs.get('spawn');
+      if (!raw) return null;
+      const [sx, sz, sy] = raw.split(',').map(Number);
+      if (!Number.isFinite(sx) || !Number.isFinite(sz)) return null;
+      return { x: sx, z: sz, yaw: Number.isFinite(sy) ? (sy * Math.PI) / 180 : 0 };
+    })();
     // startWave() делает wave++, поэтому держим на единицу меньше
     let wave = startWaveAt - 1, score = 0, kills = 0, totalKills = 0;
     type Phase = 'title' | 'wave' | 'clear' | 'dead' | 'edit';
@@ -1436,6 +1446,9 @@ export const doom: MiniGame3D = {
     // ── волны ──
     const waveScore = (n: number) => Math.round((BASE_SCORE + (n - 1) * STEP_SCORE) * D.score);
     const startWave = () => {
+      // забег начинается с титула — только здесь ставим бойца на старт, между
+      // волнами он остаётся там, где его застала зачистка
+      if (phase === 'title') applyStart();
       wave++;
       kills = 0;
       waveBudget = Math.round((4 + wave * 2.4 + s01 * 2) * D.budget);
@@ -1471,6 +1484,22 @@ export const doom: MiniGame3D = {
       const w2 = pool.filter((k) => !(wave > 8 && k === 'gnaar' && rng() < 0.5));
       return w2[Math.floor(rng() * w2.length)] ?? 'gnaar';
     };
+    /**
+     * Куда поставить бойца в начале забега. Обычно это A.start, но ?spawn его
+     * перебивает. Чужие числа зажимаем в арену, а если точка пришлась на
+     * структуру — флаг игнорируем ЦЕЛИКОМ: съёмочный флаг не должен уметь
+     * запереть бойца в пилоне.
+     */
+    const applyStart = () => {
+      px = A.start.x; pz = A.start.z; yaw = 0;
+      if (!spawnFlag) return;
+      const lim = ARENA - 2;
+      const sx = Math.max(-lim, Math.min(lim, spawnFlag.x));
+      const sz = Math.max(-lim, Math.min(lim, spawnFlag.z));
+      if (inPillar(sx, sz, P_RADIUS)) return;
+      px = sx; pz = sz; yaw = spawnFlag.yaw;
+    };
+
     /** сброс забега: арена остаётся, всё остальное — как в начале */
     const resetRun = () => {
       for (const m of mons) { m.wail?.stop(0.1); ctx.scene.remove(m.grp); for (const mt of m.mats) mt.dispose(); }
@@ -1492,7 +1521,7 @@ export const doom: MiniGame3D = {
         if (r.li >= 0) rktLights[r.li].intensity = 0;
       }
       rockets.length = 0;
-      px = A.start.x; pz = A.start.z; yaw = 0; wave = startWaveAt - 1;
+      applyStart(); wave = startWaveAt - 1;
       // очки живут ровно один забег: это счёт за попытку, а не накопленный
       // заработок, как было у денег
       score = 0; kills = 0; totalKills = 0; newRecord = false;
