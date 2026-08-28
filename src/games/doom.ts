@@ -114,6 +114,17 @@ interface Gib { x: number; y: number; z: number; vx: number; vy: number; vz: num
 interface Ball { mi: number; li: number; x: number; y: number; z: number; vx: number; vz: number; life: number }
 interface Pickup { grp: THREE.Group; kind: 'med' | 'arm' | 'bul' | 'box' | 'shl' | 'rkt' | 'launcher'; x: number; z: number; taken: number }
 interface Puff { x: number; y: number; z: number; vy: number; life: number; max: number; col: number }
+/**
+ * Событие журнала звуков (?sfxlog=1). Промо-ролик снимается захватом экрана, а
+ * WebAudio приходит в запись с плавающей задержкой — поэтому картинку пишем
+ * молча, а дорожку собирают потом по этим отметкам (t — секунды performance.now).
+ * `h` — номер зацикленного голоса: без него не понять, какой из воев сдвинулся.
+ */
+interface SfxEv {
+  t: number;
+  type?: 'loopStart' | 'loopMove' | 'loopStop' | 'marker';
+  id?: SfxId; x?: number; z?: number; h?: number; fade?: number;
+}
 
 const WEAPONS = [
   { name: 'ПИСТОЛЕТ', dmg: 15, cd: 0.36, spread: 0.02, pellets: 1, ammo: 'bul' as const, use: 1 },
@@ -745,6 +756,8 @@ export const doom: MiniGame3D = {
     buildGun(0);
 
     // ── состояние игрока ──
+    /** скорость бойца; автопилоту она же нужна, чтобы мерить «сколько прошли за кадр» */
+    const SPD = 7.4;
     let px = A.start.x, pz = A.start.z, yaw = 0, pitch = 0;
     let pY = 0;   // высота пола под игроком (платформы)
     let hp = 100, armor = 0;
@@ -754,6 +767,13 @@ export const doom: MiniGame3D = {
     const qs = new URLSearchParams(location.search);
     const startWaveAt = Math.max(1, Math.min(99, Number(qs.get('wave')) || 1));
     let showPerf = qs.get('perf') === '1';
+    // Флаги под запись промо-роликов. Дубль идёт целиком, без монтажных склеек:
+    // боец не должен умирать посреди волны (?god=1) и не должен занимать руки
+    // (?bot=1), музыка кладётся отдельным слоем (?music=0), а звуки собираются
+    // по журналу (?sfxlog=1) — в захвате экрана они плывут по времени.
+    const godMode = qs.get('god') === '1';
+    const botMode = qs.get('bot') === '1';
+    const sfxLog = qs.get('sfxlog') === '1';
     // startWave() делает wave++, поэтому держим на единицу меньше
     let wave = startWaveAt - 1, score = 0, kills = 0, totalKills = 0;
     type Phase = 'title' | 'wave' | 'clear' | 'dead' | 'edit';
@@ -1043,6 +1063,40 @@ export const doom: MiniGame3D = {
     const touch = mob ? createMultiTouch() : null;
     const sfx = createDoomAudio();
     const music = createMusicDirector(0.5);
+    // ?music=0 — тишина, но переключение дорожек по фазам работает как обычно:
+    // монтажёру нужны те же склейки, только своей копией музыки
+    if (qs.get('music') === '0') music.setVolume(0);
+    /** журнал звуков (?sfxlog=1); пустой, пока флаг не поднят */
+    const sfxEvents: SfxEv[] = [];
+    if (sfxLog) {
+      (window as unknown as { __sfxLog: { events: SfxEv[] } }).__sfxLog = { events: sfxEvents };
+      const now = () => performance.now() / 1000;
+      // методы audioDoom — обычные замыкания без this, их можно подменить прямо
+      // в объекте: так журнал видит ВСЕ вызовы, а не только те, что рядом
+      const rawPlay = sfx.play, rawLoop = sfx.loop;
+      let handles = 0;
+      sfx.play = (id, at) => {
+        sfxEvents.push(at ? { t: now(), id, x: at.x, z: at.z } : { t: now(), id });
+        rawPlay(id, at);
+      };
+      sfx.loop = (id, at) => {
+        const h = ++handles;
+        sfxEvents.push({ type: 'loopStart', t: now(), id, x: at.x, z: at.z, h });
+        const L = rawLoop(id, at);
+        // move зовут каждый кадр — в журнал кладём ~10 отметок в секунду:
+        // между ними положение всё равно интерполируется на монтаже
+        let moveT = -1;
+        return {
+          isLive: L.isLive,
+          move(x, z) {
+            const t = now();
+            if (t - moveT >= 0.1) { moveT = t; sfxEvents.push({ type: 'loopMove', t, x, z, h }); }
+            L.move(x, z);
+          },
+          stop(fade) { sfxEvents.push({ type: 'loopStop', t: now(), fade, h }); L.stop(fade); },
+        };
+      };
+    }
     const keys = new Set<string>();
     let mDX = 0, mDY = 0, mouseDown = false, locked = false;
     const onKeyDown = (e: KeyboardEvent) => {
@@ -1354,12 +1408,15 @@ export const doom: MiniGame3D = {
     // ── урон игроку ──
     const hurt = (dmg: number) => {
       if (phase !== 'wave' && phase !== 'clear') return;
-      let d = dmg;
-      if (armor > 0) { const abs = Math.min(armor, d * 0.4); armor -= abs; d -= abs; }
-      hp -= d;
       flashT = 0.3; flashCol = 0;
       faceOw = 0.6;
       sfx.play('playerPain');
+      // ?god=1: вся обратная связь на месте — вспышка, оскал на лице, крик, —
+      // но полоска не тает. Дубль промо не должен обрываться на середине волны
+      if (godMode) return;
+      let d = dmg;
+      if (armor > 0) { const abs = Math.min(armor, d * 0.4); armor -= abs; d -= abs; }
+      hp -= d;
       if (hp <= 0) { hp = 0; newRecord = bankScore(); phase = 'dead'; phaseT = 0; endSel = 0; sfx.play('playerDie');
         music.play('end', { loop: false, fade: 0.5, onEnd: () => music.play('chill', { fade: 1.6 }) }); if (document.pointerLockElement) document.exitPointerLock?.(); }
     };
@@ -2111,11 +2168,23 @@ export const doom: MiniGame3D = {
       g.restore();
     };
 
+    /** сколько кадров ещё заливать белым (синхромаркер под ?sfxlog=1) */
+    let syncLeft = sfxLog ? 3 : 0;
     const drawHud = () => {
       const sc = hs();
       g.save();
       g.scale(sc, sc);
       try { drawHudInner(); } finally { g.restore(); }
+      // СИНХРОМАРКЕР: три белых кадра в начале забега. По ним монтаж совмещает
+      // запись экрана с журналом звуков — первый белый кадр и есть общий ноль.
+      // Считаем здесь, а не в onFrame: drawHud зовётся ровно раз за кадр из
+      // любой фазы, а выходов из onFrame несколько.
+      if (syncLeft > 0) {
+        if (syncLeft === 3) sfxEvents.push({ type: 'marker', t: performance.now() / 1000 });
+        syncLeft--;
+        g.fillStyle = '#fff';
+        g.fillRect(0, 0, ctx.width, ctx.height);
+      }
     };
 
     const drawHudInner = () => {
@@ -2484,6 +2553,128 @@ export const doom: MiniGame3D = {
       return false;
     };
 
+    // ═══════════════ АВТОПИЛОТ (?bot=1) ═══════════════
+    /**
+     * Снимает промо без рук: сам выбирает цель, кружит вокруг неё, стреляет и
+     * бегает за аптечками. Своей физики у бота НЕТ — он только выставляет
+     * виртуальные оси, которые ниже прибавляются к вводу игрока, и доворачивает
+     * yaw. Поэтому на повадки тварей, коллизии и баланс он не влияет никак.
+     */
+    let botFwd = 0, botStrafe = 0, botFire = false;
+    /** сторона облёта цели и сколько ещё её держать */
+    let botOrbit = 1, botOrbitT = 0, botSwapCd = 0;
+    /** пикап, за которым идём; botGoalT — отпущенное на это время */
+    let botGoal: Pickup | null = null;
+    let botGoalT = 0, botGoalCd = 0;
+    /** сколько собирались пройти в прошлом кадре и откуда — так ловим упор в пилон */
+    let botWantLen = 0, botWasX = 0, botWasZ = 0;
+    const botTick = (dt: number) => {
+      botFwd = 0; botStrafe = 0; botFire = false;
+      // Упёрлись? Прошли меньше 40% намеченного — обходим с другой стороны.
+      // Тем же признаком в игре ловится сорванный разгон рогача: у внутренних
+      // стен «намеченного пути» не остаётся, а стоять в кадре нельзя.
+      if (botWantLen > 0 && Math.hypot(px - botWasX, pz - botWasZ) < botWantLen * 0.4) {
+        botOrbit = -botOrbit;
+        botOrbitT = 2 + rng() * 2;
+      }
+      botOrbitT -= dt;
+      if (botOrbitT <= 0) { botOrbit = rng() < 0.5 ? 1 : -1; botOrbitT = 2 + rng() * 2; }
+      if (botSwapCd > 0) botSwapCd -= dt;
+
+      // ── цель: ближайшая тварь, но подбежавший камикадзе идёт вне очереди ──
+      let tgt: Mon | null = null, bestW = 1e9, boomD = 1e9;
+      for (const m of mons) {
+        const d = Math.hypot(m.x - px, m.z - pz);
+        if (m.kind === 'boom' && d < boomD) boomD = d;
+        const w = m.kind === 'boom' && d < 8 ? d - 100 : d;
+        if (w < bestW) { bestW = w; tgt = m; }
+      }
+      const dist = tgt ? Math.hypot(tgt.x - px, tgt.z - pz) : 0;
+
+      // ── прицел ──
+      let err = Math.PI;
+      if (tgt) {
+        // вперёд = (−sin yaw, −cos yaw) — отсюда знаки, как у разворота тварей.
+        // Синусоида поверх — дрожь руки: без неё прицел стоит как приваренный,
+        // и в записи сразу видно машину
+        const want = Math.atan2(-(tgt.x - px), -(tgt.z - pz)) + Math.sin(time * 0.9) * 0.03;
+        let df = want - yaw;
+        while (df > Math.PI) df -= Math.PI * 2;
+        while (df < -Math.PI) df += Math.PI * 2;
+        const step = Math.max(-3.5 * dt, Math.min(3.5 * dt, df));
+        yaw += step;
+        err = Math.abs(df - step);
+      } else {
+        yaw += dt * 0.5;                 // целей нет — озираемся, кадр не должен замирать
+      }
+
+      // ── ход: держим дистанцию и кружим ──
+      if (!tgt) botFwd = 0.5;
+      else if (dist > 14) botFwd = 1;
+      else if (dist < 8) botFwd = -0.7;
+      else botFwd = 0.2;
+      if (boomD < 6) botFwd = -1;        // от заряда лучше подальше
+      botStrafe = botOrbit;
+
+      // ── оружие: ракетница на дальних, дробовик в упор (свои же осколки) ──
+      if (tgt && botSwapCd <= 0) {
+        let want: number;
+        if (owned[3] && dist > 7) want = 3;
+        else if (dist <= 7) want = owned[1] ? 1 : 0;
+        else if (dist > 10 && owned[2]) want = 2;
+        else want = owned[1] ? 1 : 0;
+        // с пустым стволом бот весь бой сушил бы спуск — откатываемся к тому,
+        // в чём патроны ещё есть (пистолетные находятся почти всегда)
+        if (ammo[WEAPONS[want].ammo] < WEAPONS[want].use) {
+          want = [1, 2, 0, 3].find((i) => owned[i] && ammo[WEAPONS[i].ammo] >= WEAPONS[i].use) ?? 0;
+        }
+        if (want !== weapon) { weapon = want; buildGun(want); sfx.play('weaponSwitch'); botSwapCd = 0.6; }
+      }
+
+      // ── огонь ──
+      if (tgt && err < 0.06 && ammo[WEAPONS[weapon].ammo] >= WEAPONS[weapon].use) botFire = true;
+      // ракета в упор прилетит и стрелку (самоурон ×0.35) — ждём смены ствола
+      if (weapon === 3 && dist < 6) botFire = false;
+
+      // ── пикапы: за аптечкой/патронами, но не дольше 1.5 с подряд ──
+      // Иначе бот залипает на точке респауна: пикап уже забрали, а он всё стоит
+      // и ждёт, — в кадре при этом не происходит ничего.
+      if (botGoalCd > 0) botGoalCd -= dt;
+      if (botGoal) {
+        botGoalT -= dt;
+        if (botGoalT <= 0 || botGoal.taken > 0) { botGoal = null; botGoalCd = 3; }
+      } else if (botGoalCd <= 0) {
+        const w = WEAPONS[weapon];
+        // потолки те же, что при подборе (ниже по кадру), с поправкой сложности
+        const cap = Math.round((w.ammo === 'bul' ? 300 : w.ammo === 'shl' ? 80 : 30) * D.ammoMul);
+        const kinds: Pickup['kind'][] = hp < 70 ? ['med']
+          : ammo[w.ammo] < cap * 0.2
+            ? (w.ammo === 'bul' ? ['bul', 'box'] : w.ammo === 'shl' ? ['shl'] : ['rkt'])
+            : [];
+        let bd = 1e9;
+        for (const p of pickups) {
+          if (p.taken > 0 || !kinds.includes(p.kind)) continue;
+          const d = Math.hypot(p.x - px, p.z - pz);
+          if (d < bd) { bd = d; botGoal = p; }
+        }
+        if (botGoal) botGoalT = 1.5;
+      }
+      // Ход к пикапу — в тех же осях, что и у игрока: вперёд (−sin, −cos),
+      // вбок (cos, −sin). Прицел при этом остаётся на твари, как у живого.
+      // Пока рядом камикадзе, отбегание важнее любого пикапа.
+      if (botGoal && boomD >= 6) {
+        const gx = botGoal.x - px, gz = botGoal.z - pz;
+        const gl = Math.hypot(gx, gz) || 1;
+        const sy = Math.sin(yaw), cy = Math.cos(yaw);
+        botFwd = (-gx * sy - gz * cy) / gl;
+        botStrafe = (gx * cy - gz * sy) / gl;
+      }
+
+      // намеченный путь — сверим его в следующем кадре (см. срыв обхода выше)
+      botWasX = px; botWasZ = pz;
+      botWantLen = botFwd || botStrafe ? SPD * dt : 0;
+    };
+
     let prevPD = false, prevEnter = false, prevUp = false, prevDown = false, prevLR = 0;
     let menuMusicOn = false; // chill в титуле — только после жеста (autoplay-политика)
 
@@ -2664,6 +2855,9 @@ export const doom: MiniGame3D = {
         return;
       }
 
+      // автопилот выставляет виртуальный ввод ДО разбора настоящего
+      if (botMode && (phase === 'wave' || phase === 'clear')) botTick(dt);
+
       // ── обзор ──
       const sens = 0.0022;
       yaw -= mDX * sens;
@@ -2692,8 +2886,8 @@ export const doom: MiniGame3D = {
         if (keys.has('ArrowRight')) strafe += 1;
       }
       if (touch) { fwd -= tmy; strafe += tmx; }
+      if (botMode) { fwd += botFwd; strafe += botStrafe; }
       const len = Math.hypot(fwd, strafe) || 1;
-      const SPD = 7.4;
       const mvx = (-sinY * fwd + cosY * strafe) / len * SPD;
       const mvz = (-cosY * fwd - sinY * strafe) / len * SPD;
       if (fwd || strafe) bob += dt * 9;
@@ -2702,7 +2896,7 @@ export const doom: MiniGame3D = {
       sfx.setListener(px, pz, yaw);   // позиционный звук считается от игрока
 
       // ── огонь ──
-      if ((mouseDown && locked) || keys.has('Space') || keys.has('ControlLeft') || keys.has('ControlRight') || tFire) fire();
+      if ((mouseDown && locked) || keys.has('Space') || keys.has('ControlLeft') || keys.has('ControlRight') || tFire || botFire) fire();
 
       // ── волны ──
       if (phase === 'wave') {
