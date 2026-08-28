@@ -782,6 +782,34 @@ export const doom: MiniGame3D = {
       D = DIFFS[diffIx];
       try { localStorage.setItem('fw_diff', D.key); } catch { /* приватный режим */ }
     };
+    // ── РЕКОРД ──
+    // Свой на каждую сложность: у хардкора множитель очков почти вдвое больше,
+    // и общий рекорд всегда принадлежал бы ему — сравнивать было бы нечего.
+    // Забеги с прыжком по волнам (?wave= и IDCLEV) в рекорд НЕ идут: там первая
+    // же зачищенная волна даёт очки за все пропущенные.
+    const BEST_KEY = 'fw_best';
+    const loadBest = (): Record<string, number> => {
+      const res: Record<string, number> = {};
+      let o: Record<string, unknown> = {};
+      try { o = JSON.parse(localStorage.getItem(BEST_KEY) ?? '{}') as Record<string, unknown>; }
+      catch { /* битое — считаем, что рекордов нет */ }
+      for (const dd of DIFFS) {
+        const v = o[dd.key];
+        res[dd.key] = typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.round(v)) : 0;
+      }
+      return res;
+    };
+    const best = loadBest();
+    let cheated = startWaveAt > 1;
+    let newRecord = false;
+    /** записать очки забега в рекорд текущей сложности; true — если побит */
+    const bankScore = (): boolean => {
+      if (cheated || score <= best[D.key]) return false;
+      best[D.key] = score;
+      try { localStorage.setItem(BEST_KEY, JSON.stringify(best)); } catch { /* приватный режим */ }
+      return true;
+    };
+
     let faceLook = 0, faceLookT = 0, faceOw = 0;
     let launcherMsg = 0;       // сколько ещё секунд показывать подсказку о ракетнице
     // пиксельные искры-огонь, поднимающиеся сквозь название на титуле
@@ -1332,7 +1360,7 @@ export const doom: MiniGame3D = {
       flashT = 0.3; flashCol = 0;
       faceOw = 0.6;
       sfx.play('playerPain');
-      if (hp <= 0) { hp = 0; phase = 'dead'; phaseT = 0; endSel = 0; sfx.play('playerDie');
+      if (hp <= 0) { hp = 0; newRecord = bankScore(); phase = 'dead'; phaseT = 0; endSel = 0; sfx.play('playerDie');
         music.play('end', { loop: false, fade: 0.5, onEnd: () => music.play('chill', { fade: 1.6 }) }); if (document.pointerLockElement) document.exitPointerLock?.(); }
     };
 
@@ -1398,7 +1426,7 @@ export const doom: MiniGame3D = {
       px = A.start.x; pz = A.start.z; yaw = 0; wave = startWaveAt - 1;
       // очки живут ровно один забег: это счёт за попытку, а не накопленный
       // заработок, как было у денег
-      score = 0; kills = 0; totalKills = 0;
+      score = 0; kills = 0; totalKills = 0; newRecord = false;
       resetPickups();
     };
     const restart = () => {
@@ -1408,6 +1436,7 @@ export const doom: MiniGame3D = {
     };
     /** назад на титул: забег сброшен, меню игры и есть главный экран */
     const toTitle = () => {
+      bankScore();          // брошенный забег тоже засчитываем: очки-то заработаны
       resetRun();
       applySky('hell');                 // титул всегда адский
       phase = 'title'; phaseT = 0; titleSel = 0;
@@ -2153,6 +2182,12 @@ export const doom: MiniGame3D = {
         fitFont(g, 'ТРИМАЙ ПОРТ · ХВИЛЯ ЗА ХВИЛЕЮ', W * 0.8, 15, FAM);
         g.fillStyle = '#c88a5a';
         g.fillText('ТРИМАЙ ПОРТ · ХВИЛЯ ЗА ХВИЛЕЮ', W / 2, H * 0.24 + 34);
+        if (best[D.key] > 0) {
+          const rec = `РЕКОРД · ${D.name} · ${best[D.key]}`;
+          fitFont(g, rec, W * 0.7, 16, FAM);
+          g.fillStyle = '#7bd88f';
+          g.fillText(rec, W / 2, H * 0.24 + 60);
+        }
         const menu = titleMenu();
         const step = menu.length >= 5 ? 48 : 58;
         for (let i = 0; i < menu.length; i++) {
@@ -2372,6 +2407,14 @@ export const doom: MiniGame3D = {
         fitFont(g, sub, W * 0.8, 15, FAM);
         g.fillStyle = '#c8a0a0';
         g.fillText(sub, W / 2, H * 0.26 + 84);
+        const rec = cheated ? 'РЕКОРД НЕ ЗАСЧИТАН — БЫЛ ПРЫЖОК ПО ВОЛНАМ'
+          : newRecord ? 'НОВЫЙ РЕКОРД!'
+            : `РЕКОРД · ${D.name} · ${best[D.key]}`;
+        fitFont(g, rec, W * 0.8, newRecord ? 24 : 16, FAM);
+        // новый рекорд мигает золотом, обычная строка — спокойная зелёная
+        g.fillStyle = cheated ? '#8a6a60'
+          : newRecord ? (Math.floor(time * 4) % 2 ? '#e8c840' : '#fff0a0') : '#7bd88f';
+        g.fillText(rec, W / 2, H * 0.26 + 112);
         const R = btnRects();
         pixelBtn(R.again, 'Ещё раз', endSel === 0, '#e8c840');
         pixelBtn(R.menu, 'В меню', endSel === 1, '#7bd88f');
@@ -2561,6 +2604,7 @@ export const doom: MiniGame3D = {
           // IDCLEV набран: прыжок сразу на выбранную волну
           sfx.play('menuSelect');
           wave = warpTo - 1;                     // startWave сделает wave++
+          cheated = true;                        // прыжок по волнам — рекорд не в счёт
           warpTo = null;
           music.play('main', { fade: 1.4 });
           startWave();
