@@ -17,6 +17,8 @@ export interface FramePerf {
   /** логика игры, мс */ update: number;
   /** renderer.render, мс */ render: number;
   calls: number; tris: number; programs: number; geometries: number; textures: number;
+  /** текущий pixelRatio WebGL-канваса (адаптив может опускать его ниже экранного) */
+  dpr: number;
 }
 
 export interface MiniGame3DContext {
@@ -32,6 +34,8 @@ export interface MiniGame3DContext {
   /** скомпилировать шейдеры всего видимого сейчас — прогрев на титуле,
    *  чтобы первая встреча с материалом не стоила кадра посреди боя */
   compile(): void;
+  /** потолок pixelRatio для WebGL-канваса (HUD не трогает); адаптив работает ПОД ним */
+  setMaxPixelRatio(cap: number): void;
   onFrame(cb: (dt: number) => void): void;
   finish(result: MiniGameResult): void;
 }
@@ -253,7 +257,15 @@ export function voxels(
 }
 
 // ── рантайм ───────────────────────────────────────────────────────────────────
-export function runMiniGame3D(game: MiniGame3D, opts: MiniGameOpts = {}): Promise<MiniGameResult> {
+/** настройки создания рендерера: читаются один раз, до первого кадра */
+export interface RuntimeOpts {
+  /** false — без MSAA (слабым GPU он дорог); применяется только при создании */
+  antialias?: boolean;
+  /** стартовый потолок pixelRatio WebGL-канваса */
+  maxPixelRatio?: number;
+}
+
+export function runMiniGame3D(game: MiniGame3D, opts: MiniGameOpts = {}, rt: RuntimeOpts = {}): Promise<MiniGameResult> {
   return new Promise((resolve) => {
     const root = document.createElement('div');
     root.className = 'mg-overlay';
@@ -267,7 +279,27 @@ export function runMiniGame3D(game: MiniGame3D, opts: MiniGameOpts = {}): Promis
     document.body.appendChild(root);
 
     // high-performance: на ноутбуках с двумя видеокартами просим дискретную
-    const renderer = new THREE.WebGLRenderer({ canvas: glCanvas, antialias: true, powerPreference: 'high-performance' });
+    // ?press=1 — режим съёмки: буфер рисования сохраняется между кадрами.
+    // Без этого канвас нельзя ни перерисовать в другой канвас, ни снять
+    // toDataURL — отдаётся пустота. В обычной игре флаг стоит выключенным:
+    // сохранение буфера стоит производительности.
+    const pressMode = new URLSearchParams(location.search).get('press') === '1';
+    // WebGL может отсутствовать (древний браузер, software-блокировка) —
+    // тогда честное сообщение вместо чёрного экрана
+    let renderer: THREE.WebGLRenderer;
+    try {
+      renderer = new THREE.WebGLRenderer({
+        canvas: glCanvas, antialias: rt.antialias ?? true, powerPreference: 'high-performance',
+        preserveDrawingBuffer: pressMode,
+      });
+    } catch {
+      const msg = document.createElement('div');
+      msg.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#e8dcd4;background:#0d0605;font:16px ui-monospace,monospace;text-align:center;padding:24px;';
+      msg.textContent = 'WebGL недоступний у цьому браузері · WebGL is not available in this browser';
+      root.appendChild(msg);
+      resolve({ success: false, score: 0 });
+      return;
+    }
     renderer.setClearColor(0x0b1020, 1);
     const scene = new THREE.Scene();
     // перспективная камера по флагу игры (persp), иначе — стандартная орто «под 2D»
@@ -289,18 +321,31 @@ export function runMiniGame3D(game: MiniGame3D, opts: MiniGameOpts = {}): Promis
 
     let width = 0;
     let height = 0;
+    // ── АДАПТИВНОЕ РАЗРЕШЕНИЕ ──
+    // Единственный универсальный ответ на «у кого-то тормозит»: игра упирается
+    // в филлрейт, и на слабом GPU дешевле всего рисовать меньше пикселей.
+    // Лестница pixelRatio, ходим по ней по замеру кадра; HUD-канвас НЕ трогаем —
+    // текст остаётся хрустящим при любом качестве. Тач стартует с 1.5:
+    // ретина телефонов — главный пожиратель филлрейта.
+    const DPR_STEPS = [2, 1.5, 1.25, 1, 0.85];
+    let dprCap = rt.maxPixelRatio ?? (('ontouchstart' in window) ? 1.5 : 2);
+    let dprIx = 0;            // индекс в лестнице (эффективный dpr ещё режется капом)
+    const effDpr = () => Math.min(window.devicePixelRatio || 1, dprCap, DPR_STEPS[dprIx]);
     const resize = () => {
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const dpr = effDpr();
       // подстраховка: если оверлей ещё не измерен (0), берём окно — иначе aspect=NaN
       width = root.clientWidth || window.innerWidth || 1;
       height = root.clientHeight || window.innerHeight || 1;
       renderer.setPixelRatio(dpr);
       renderer.setSize(width, height, false);
-      hudCanvas.width = Math.round(width * dpr);
-      hudCanvas.height = Math.round(height * dpr);
+      // HUD всегда в родном разрешении экрана: адаптив жертвует пикселями
+      // трёхмерья, но не чёткостью текста
+      const hudDpr = Math.min(window.devicePixelRatio || 1, 2);
+      hudCanvas.width = Math.round(width * hudDpr);
+      hudCanvas.height = Math.round(height * hudDpr);
       hudCanvas.style.width = width + 'px';
       hudCanvas.style.height = height + 'px';
-      hud.setTransform(dpr, 0, 0, dpr, 0, 0);
+      hud.setTransform(hudDpr, 0, 0, hudDpr, 0, 0);
       // у перспективной камеры аспект ведёт рантайм (орто-проекцию задаёт игра)
       if (camera instanceof THREE.PerspectiveCamera) {
         camera.aspect = width / height;
@@ -316,8 +361,27 @@ export function runMiniGame3D(game: MiniGame3D, opts: MiniGameOpts = {}): Promis
     let done = false;
 
     // ── замер кадра ──
-    const perf: FramePerf = { frame: 0, spike: 0, update: 0, render: 0, calls: 0, tris: 0, programs: 0, geometries: 0, textures: 0 };
+    const perf: FramePerf = { frame: 0, spike: 0, update: 0, render: 0, calls: 0, tris: 0, programs: 0, geometries: 0, textures: 0, dpr: 1 };
     let spikeAcc = 0, spikeT = 0, prevT = 0;
+
+    // ── автомат адаптива ──
+    // Вниз: средний кадр хуже 22 мс дольше 2.5 с. Вверх: стабильно лучше 12 мс
+    // дольше 8 с; после каждого спуска подъём остывает 20 с — иначе лестница
+    // звенит туда-сюда на границе.
+    let badT = 0, goodT = 0, upCooldown = 0;
+    const adapt = (dt: number) => {
+      upCooldown = Math.max(0, upCooldown - dt);
+      if (perf.frame > 22) { badT += dt; goodT = 0; }
+      else if (perf.frame < 12) { goodT += dt; badT = 0; }
+      else { badT = 0; goodT = 0; }
+      if (badT > 2.5 && dprIx < DPR_STEPS.length - 1) {
+        dprIx++; badT = 0; goodT = 0; upCooldown = 20;
+        resize();
+      } else if (goodT > 8 && dprIx > 0 && upCooldown <= 0) {
+        dprIx--; goodT = 0;
+        resize();
+      }
+    };
 
     const finish = (result: MiniGameResult) => {
       if (done) return;
@@ -342,6 +406,10 @@ export function runMiniGame3D(game: MiniGame3D, opts: MiniGameOpts = {}): Promis
       input: input.state,
       perf,
       compile() { renderer.compile(scene, camera); },
+      setMaxPixelRatio(cap: number) {
+        dprCap = Math.max(0.6, Math.min(2, cap));
+        resize();
+      },
       onFrame(cb) {
         frameCb = cb;
       },
@@ -369,6 +437,8 @@ export function runMiniGame3D(game: MiniGame3D, opts: MiniGameOpts = {}): Promis
       const t2 = performance.now();
       perf.update += (t1 - t0 - perf.update) * 0.1;
       perf.render += (t2 - t1 - perf.render) * 0.1;
+      adapt(dt);
+      perf.dpr = effDpr();
       perf.calls = renderer.info.render.calls;
       perf.tris = renderer.info.render.triangles;
       perf.programs = renderer.info.programs?.length ?? 0;

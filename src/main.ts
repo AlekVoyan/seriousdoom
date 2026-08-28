@@ -10,4 +10,12 @@ import { doom } from './games/doom';
  * Штатных выходов из забега не осталось (выходить в браузере некуда), но если
  * игра всё же завершится, перезагружаем страницу: пустой экран — хуже.
  */
-void runMiniGame3D(doom, { stress: 20 }).then(() => location.reload());
+// Качество читается ДО создания рендерера: MSAA выключается только при
+// создании контекста, поэтому НИЗЬКА полноценно вступает после перезапуска
+// страницы (кап разрешения и частицы игра применяет и на лету).
+let lowQ = false;
+try { lowQ = localStorage.getItem('fw_quality') === 'lo'; } catch { /* приватный режим */ }
+void runMiniGame3D(doom, { stress: 20 }, {
+  antialias: !lowQ,
+  maxPixelRatio: lowQ ? 1 : undefined,
+}).then(() => location.reload());

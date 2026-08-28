@@ -158,7 +158,11 @@ export const doom: MiniGame3D = {
     const s01 = Math.max(0, Math.min(1, stress / 100));
     const rng = makeRng(Math.floor(Math.random() * 2 ** 31) + 1);
     const cam = ctx.camera as unknown as THREE.PerspectiveCamera;
-    const mob = isTouchDevice();
+    // ?mob=1 — принудительная тач-раскладка: стики и кнопка огня появляются
+    // на десктопе. Нужно, чтобы снять мобильный кадр в полном разрешении:
+    // эмулятор устройства отдаёт скриншот в CSS-пикселях, а не в пикселях
+    // канваса. На живом сайте флага нет — там работает обычное определение.
+    const mob = isTouchDevice() || new URLSearchParams(location.search).get('mob') === '1';
     void document.fonts?.load?.('16px "PixelHalf"');
     const FONT = (n: number) => `${n}px "PixelHalf", ui-monospace, monospace`;
     const FAM = '"PixelHalf", ui-monospace, monospace';
@@ -855,17 +859,36 @@ export const doom: MiniGame3D = {
     // выбор запоминается между забегами
     let diffIx = Math.max(0, DIFFS.findIndex((d) => d.key === localStorage.getItem('fw_diff')));
     let D = DIFFS[diffIx];
-    type MenuAct = 'play' | 'diff' | 'arena' | 'lang' | 'edit';
+    type MenuAct = 'play' | 'diff' | 'arena' | 'lang' | 'quality' | 'edit';
     const titleMenu = (): { label: string; act: MenuAct; hint?: string }[] => {
       const it: { label: string; act: MenuAct; hint?: string }[] = [
         { label: t('menu.play'), act: 'play' },
         { label: t('menu.diff', dName(D)), act: 'diff', hint: dHint(D) },
         { label: t('menu.arena', arenaLabel()), act: 'arena', hint: t('menu.arena.hint') },
         { label: t('menu.lang'), act: 'lang', hint: t('menu.lang.hint') },
+        { label: t('menu.quality', t(lowQ ? 'quality.lo' : 'quality.hi')), act: 'quality', hint: t('menu.quality.hint') },
         { label: t('menu.edit'), act: 'edit' },
       ];
       return it;
     };
+    // ── КАЧЕСТВО ──
+    // НИЗЬКА: кап разрешения 1 и вдвое меньше частиц применяются сразу;
+    // отключение MSAA доедет при следующем запуске страницы (main.ts читает
+    // fw_quality до создания рендерера). Адаптив разрешения работает всегда,
+    // ручка нужна тем, у кого он выбрал не то, — и стримерам.
+    let lowQ = false;
+    try { lowQ = localStorage.getItem('fw_quality') === 'lo'; } catch { /* приватный режим */ }
+    const qMul = () => (lowQ ? 0.5 : 1);
+    const applyQuality = () => {
+      ctx.setMaxPixelRatio(lowQ ? 1 : 2);
+    };
+    applyQuality();
+    const toggleQuality = () => {
+      lowQ = !lowQ;
+      try { localStorage.setItem('fw_quality', lowQ ? 'lo' : 'hi'); } catch { /* noop */ }
+      applyQuality();
+    };
+
     const setDiff = (ix: number) => {
       diffIx = (ix + DIFFS.length) % DIFFS.length;
       D = DIFFS[diffIx];
@@ -1026,7 +1049,7 @@ export const doom: MiniGame3D = {
     };
 
     function puff(x: number, y: number, z: number, col: number, max: number) {
-      if (puffs.length >= PUFF_MAX) return;     // пул выбран — лишнюю искру просто не рисуем
+      if (puffs.length >= PUFF_MAX * qMul()) return;   // низкое качество режет пул вдвое
       puffs.push({ x, y, z, vy: 1.2 + rng(), life: 0, max, col });
     }
 
@@ -1037,9 +1060,9 @@ export const doom: MiniGame3D = {
       const base = new THREE.Color(d.color);
       if (m.vet) base.lerp(new THREE.Color(0x9a1010), 0.35);
       const baseHex = base.getHex();
-      const n = 10 + Math.floor(rng() * 6);
+      const n = Math.round((10 + Math.floor(rng() * 6)) * qMul());
       for (let i = 0; i < n; i++) {
-        if (gibs.length >= GIB_MAX) break;
+        if (gibs.length >= GIB_MAX * qMul()) break;
         const red = rng() < 0.4;
         gibs.push({
           x: m.x + (rng() - 0.5) * 0.6, y: m.y + 0.4 + rng() * d.h * 0.7, z: m.z + (rng() - 0.5) * 0.6,
@@ -2134,6 +2157,7 @@ export const doom: MiniGame3D = {
         ['ракеты', `${rockets.length}/${RKT_MAX} · ${ammo.rkt} шт`, false],
         ['волна / бюджет', `${wave} / ${waveBudget}`, false],
         ['режим', `${dName(D)} · потолок ${D.cap}`, false],
+        ['разрешение', `×${ctx.perf.dpr.toFixed(2)}${lowQ ? ' · НИЗК' : ''}`, false],
       ];
       const pad = 8, lh = 15, w = 208;
       const h = rows.length * lh + pad * 2;
@@ -2240,6 +2264,7 @@ export const doom: MiniGame3D = {
     /** сэмовский линзовый флейр: сияние на солнце + блики к центру экрана */
     const sunScreen = new THREE.Vector3();
     const drawSunFlare = () => {
+      if (lowQ) return;                 // полэкрана lighter-градиентов — дорого
       const sky = phase === 'edit' ? eDef.sky : A.sky;
       if (sky !== 'day') return;
       sunScreen.copy(SUN_POS).project(cam);
@@ -2904,6 +2929,7 @@ export const doom: MiniGame3D = {
           else if (selAct === 'arena') { toggleArena(lrEdge > 0 ? 1 : -1); sfx.play('menuMove'); }
           // языка два — в какую сторону ни листай, получится второй
           else if (selAct === 'lang') { toggleLang(); sfx.play('menuMove'); }
+          else if (selAct === 'quality') { toggleQuality(); sfx.play('menuMove'); }
         }
         const startNow = enterEdge || keys.has('Space') || (mob && pdEdge);
         if (startNow) {
@@ -2923,6 +2949,7 @@ export const doom: MiniGame3D = {
           if (act === 'diff') setDiff(diffIx + 1);
           else if (act === 'arena') toggleArena();
           else if (act === 'lang') toggleLang();
+          else if (act === 'quality') toggleQuality();
           else if (act === 'edit') enterEditor();
           else {
             music.play('main', { fade: 1.4 });   // из chill в бой с наложением

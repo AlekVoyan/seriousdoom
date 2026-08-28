@@ -33,6 +33,10 @@ export const STRINGS: Record<string, { uk: string; en: string }> = {
   'menu.arena.hint': { uk: 'базова, вбудовані та свої', en: 'default, built-in and your own' },
   'menu.lang': { uk: 'МОВА: УКРАЇНСЬКА', en: 'LANGUAGE: ENGLISH' },
   'menu.lang.hint': { uk: 'українська · english', en: 'ukrainian · english' },
+  'menu.quality': { uk: 'ЯКІСТЬ: {0}', en: 'QUALITY: {0}' },
+  'menu.quality.hint': { uk: 'якщо гра гальмує — постав НИЗЬКУ', en: 'if the game stutters, set LOW' },
+  'quality.hi': { uk: 'ВИСОКА', en: 'HIGH' },
+  'quality.lo': { uk: 'НИЗЬКА', en: 'LOW' },
   'menu.edit': { uk: 'РЕДАКТОР АРЕНИ', en: 'ARENA EDITOR' },
 
   // ── СЛОЖНОСТИ ──
