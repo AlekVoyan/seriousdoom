@@ -19,7 +19,8 @@
         -webkit-font-smoothing: antialiased;
         overflow: hidden;
       }
-      /* Полноэкранный оверлей игры */
+      /* Игра занимает всю страницу: своей заставки у неё нет, титул с меню
+         нарисован внутри самой игры */
       .mg-overlay {
         position: fixed;
         inset: 0;
@@ -35,35 +36,9 @@
         width: 100%;
         height: 100%;
       }
-      /* Заставка между забегами */
-      #shell {
-        position: fixed; inset: 0; display: flex; flex-direction: column;
-        align-items: center; justify-content: center; gap: 18px; text-align: center;
-        background: radial-gradient(ellipse at 50% 0%, #4a1108 0%, #0d0605 68%);
-      }
-      #shell h1 {
-        font-family: 'PixelHalf', ui-monospace, monospace; font-size: 58px; margin: 0;
-        color: #e8c840; text-shadow: 0 0 28px rgba(255, 90, 20, .85); letter-spacing: 2px;
-      }
-      #shell .sub { color: #c88a5a; font-size: 13px; letter-spacing: 1px; }
-      #shell .score { color: #7bd88f; font-size: 15px; min-height: 20px; }
-      #shell button {
-        font: inherit; font-family: 'PixelHalf', ui-monospace, monospace; font-size: 22px;
-        cursor: pointer; background: #2a1714; color: #e8c840;
-        border: 2px solid #4a2c26; padding: 12px 30px; border-radius: 5px;
-      }
-      #shell button:hover { border-color: #e8c840; }
-      #shell a { color: #a07a6a; font-size: 12px; }
     </style>
   </head>
   <body>
-    <div id="shell">
-      <h1>ФАЄРВОЛ</h1>
-      <div class="sub">ТРИМАЙ ПОРТ · ХВИЛЯ ЗА ХВИЛЕЮ</div>
-      <div class="score" id="score"></div>
-      <button id="play">ГРАТИ</button>
-      <a href="./assets.html">вітрина ассетів →</a>
-    </div>
     <script type="module" src="./src/main.ts"></script>
   </body>
 </html>

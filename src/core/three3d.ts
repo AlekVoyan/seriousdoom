@@ -324,17 +324,11 @@ export function runMiniGame3D(game: MiniGame3D, opts: MiniGameOpts = {}): Promis
       done = true;
       cancelAnimationFrame(raf);
       window.removeEventListener('resize', resize);
-      window.removeEventListener('keydown', onEsc);
       input.dispose();
       renderer.dispose();
       root.remove();
       resolve(result);
     };
-    const onEsc = (e: KeyboardEvent) => {
-      if (e.code === 'Escape') finish({ success: false, score: 0 });
-    };
-    window.addEventListener('keydown', onEsc);
-
     const context: MiniGame3DContext = {
       scene,
       camera: camera as THREE.OrthographicCamera, // при game.persp — фактически PerspectiveCamera

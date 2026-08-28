@@ -13,9 +13,8 @@ import { createMusicDirector } from '../core/musicDirector';
  * вертикали, вспышки урона), роспись монстров и режим — «выживание против волн».
  * Всё нарисовано своими кубами, ни одного чужого ассета или строки чужого кода.
  *
- * Герой VoxEvasion не воюет — он ПЛЕЙТЕСТИТ шутер за деньги (как «Удалёнка»):
- * один просторный уровень, волны валят со всех сторон, за волну платят по
- * арифметической прогрессии, смерть → «Вывести деньги / Работать ещё».
+ * Один просторный уровень, волны валят со всех сторон, за отбитую волну дают
+ * очки по арифметической прогрессии, смерть → «Ещё раз / В меню».
  *
  * Монстры (6 типов × 2 ранга): Гнар, Безголовый бомбист, Костяной скакун,
  * Рогач, Гарпия, Механоид. Каждая 5-я волна — наплыв бомбистов.
@@ -48,29 +47,29 @@ interface Diff {
   ammoMul: number;    // множитель потолков боезапаса и щедрости пикапов
   respawn: number;    // через сколько секунд возвращается подобранное
   breather: number;   // пауза между волнами
-  reward: number;     // множитель гонорара
+  score: number;      // множитель очков за волну
   boomAlways: boolean; // камикадзе подмешиваются в каждую волну, не только в наплывы
 }
 const DIFFS: Diff[] = [
   {
     key: 'norm', name: 'ЗВИЧАЙНА', hint: 'як задумано', col: '#7bd88f',
     dmg: 1, heal: 1, budget: 1, cap: 26, rate: 1, vetFrom: 4, vetMax: 0.5,
-    atk: 1, ammoMul: 1, respawn: 14, breather: 4, reward: 1, boomAlways: false,
+    atk: 1, ammoMul: 1, respawn: 14, breather: 4, score: 1, boomAlways: false,
   },
   {
     key: 'hard', name: 'ВАЖКА', hint: 'бьют больнее, аптечки скупее', col: '#e8c840',
     dmg: 1.5, heal: 0.6, budget: 1.3, cap: 32, rate: 0.85, vetFrom: 2, vetMax: 0.65,
-    atk: 0.8, ammoMul: 1, respawn: 12, breather: 3.5, reward: 1.35, boomAlways: true,
+    atk: 0.8, ammoMul: 1, respawn: 12, breather: 3.5, score: 1.35, boomAlways: true,
   },
   {
     key: 'core', name: 'ХАРДКОР', hint: 'месиво · патронов больше, времени нет', col: '#ff4a2a',
     dmg: 2, heal: 0.45, budget: 1.85, cap: 44, rate: 0.55, vetFrom: 1, vetMax: 0.8,
-    atk: 0.6, ammoMul: 1.6, respawn: 8, breather: 2, reward: 1.9, boomAlways: true,
+    atk: 0.6, ammoMul: 1.6, respawn: 8, breather: 2, score: 1.9, boomAlways: true,
   },
 ];
 
-const BASE_REWARD = 60;
-const STEP_REWARD = 40;
+const BASE_SCORE = 60;
+const STEP_SCORE = 40;
 
 const C_FLOOR_A = 0x3a3230;
 const C_FLOOR_B = 0x2e2624;
@@ -756,7 +755,7 @@ export const doom: MiniGame3D = {
     const startWaveAt = Math.max(1, Math.min(99, Number(qs.get('wave')) || 1));
     let showPerf = qs.get('perf') === '1';
     // startWave() делает wave++, поэтому держим на единицу меньше
-    let wave = startWaveAt - 1, money = 0, kills = 0, totalKills = 0;
+    let wave = startWaveAt - 1, score = 0, kills = 0, totalKills = 0;
     type Phase = 'title' | 'wave' | 'clear' | 'dead' | 'edit';
     let phase: Phase = 'title';
     let phaseT = 0, time = 0;
@@ -769,13 +768,12 @@ export const doom: MiniGame3D = {
     // выбор запоминается между забегами
     let diffIx = Math.max(0, DIFFS.findIndex((d) => d.key === localStorage.getItem('fw_diff')));
     let D = DIFFS[diffIx];
-    const titleMenu = (): { label: string; act: 'play' | 'diff' | 'arena' | 'edit' | 'exit'; hint?: string }[] => {
-      const it: { label: string; act: 'play' | 'diff' | 'arena' | 'edit' | 'exit'; hint?: string }[] = [
+    const titleMenu = (): { label: string; act: 'play' | 'diff' | 'arena' | 'edit'; hint?: string }[] => {
+      const it: { label: string; act: 'play' | 'diff' | 'arena' | 'edit'; hint?: string }[] = [
         { label: 'НОВА ГРА', act: 'play' },
         { label: `СКЛАДНІСТЬ: ${D.name}`, act: 'diff', hint: D.hint },
         { label: `АРЕНА: ${arenaLabel()}`, act: 'arena', hint: 'базова, вбудовані та свої' },
         { label: 'РЕДАКТОР АРЕНИ', act: 'edit' },
-        { label: 'ВИЙТИ', act: 'exit' },
       ];
       return it;
     };
@@ -1022,6 +1020,14 @@ export const doom: MiniGame3D = {
     const onKeyDown = (e: KeyboardEvent) => {
       keys.add(e.code);
       if (e.code === 'F3') { showPerf = !showPerf; e.preventDefault(); }
+      // Escape: первое нажатие браузер тратит на выход из захвата мыши, второе
+      // (курсор уже свободен) уводит на титул. Иначе «верни мне курсор» стоило
+      // бы забега — в отдельной сборке на Godot такой развилки нет, там Esc
+      // сразу уходит в титул
+      if (e.code === 'Escape' && !locked && (phase === 'wave' || phase === 'clear')) {
+        toTitle();
+        return;
+      }
       // ── редактор ──
       if (phase === 'edit') {
         const mD = /^Digit(\d)$/.exec(e.code);
@@ -1331,7 +1337,7 @@ export const doom: MiniGame3D = {
     };
 
     // ── волны ──
-    const waveReward = (n: number) => Math.round((BASE_REWARD + (n - 1) * STEP_REWARD) * D.reward);
+    const waveScore = (n: number) => Math.round((BASE_SCORE + (n - 1) * STEP_SCORE) * D.score);
     const startWave = () => {
       wave++;
       kills = 0;
@@ -1368,7 +1374,8 @@ export const doom: MiniGame3D = {
       const w2 = pool.filter((k) => !(wave > 8 && k === 'gnaar' && rng() < 0.5));
       return w2[Math.floor(rng() * w2.length)] ?? 'gnaar';
     };
-    const restart = () => {
+    /** сброс забега: арена остаётся, всё остальное — как в начале */
+    const resetRun = () => {
       for (const m of mons) { m.wail?.stop(0.1); ctx.scene.remove(m.grp); for (const mt of m.mats) mt.dispose(); }
       mons.length = 0; alive = 0;
       for (const b of balls) {
@@ -1389,9 +1396,23 @@ export const doom: MiniGame3D = {
       }
       rockets.length = 0;
       px = A.start.x; pz = A.start.z; yaw = 0; wave = startWaveAt - 1;
+      // очки живут ровно один забег: это счёт за попытку, а не накопленный
+      // заработок, как было у денег
+      score = 0; kills = 0; totalKills = 0;
       resetPickups();
+    };
+    const restart = () => {
+      resetRun();
       music.play('main', { fade: 0.8 });
       startWave();
+    };
+    /** назад на титул: забег сброшен, меню игры и есть главный экран */
+    const toTitle = () => {
+      resetRun();
+      applySky('hell');                 // титул всегда адский
+      phase = 'title'; phaseT = 0; titleSel = 0;
+      music.play('chill', { fade: 1.2 });
+      if (document.pointerLockElement) document.exitPointerLock?.();
     };
 
     // ═══════════════ РЕДАКТОР АРЕНЫ (майнкрафт-стиль) ═══════════════
@@ -1796,8 +1817,8 @@ export const doom: MiniGame3D = {
       const W = HW(), H = HH();
       const w = Math.min(230, W * 0.38), h = 48, gap = 22;
       return {
-        cash: { x: W / 2 - w - gap / 2, y: H * 0.6, w, h },
-        work: { x: W / 2 + gap / 2, y: H * 0.6, w, h },
+        again: { x: W / 2 - w - gap / 2, y: H * 0.6, w, h },
+        menu: { x: W / 2 + gap / 2, y: H * 0.6, w, h },
       };
     };
     const inRect = (r: { x: number; y: number; w: number; h: number }, x: number, y: number) =>
@@ -1890,13 +1911,13 @@ export const doom: MiniGame3D = {
       // ОРУЖИЕ + ДЕНЬГИ
       cell(u * 81, u * 17);
       g.fillStyle = '#c8a0a0'; g.font = FONT(10);
-      g.fillText('ОРУЖИЕ', u * 89.5, lblY);
+      g.fillText('ОРУЖИЕ · ОЧКИ', u * 89.5, lblY);
       for (let i = 0; i < 3; i++) {
         g.fillStyle = owned[i] ? (i === weapon ? '#e8c840' : '#8a7a40') : '#3a2a26';
         g.fillRect(u * 84.2 + i * u * 3.8, lblY + 7, u * 3, 6);
       }
       g.fillStyle = '#7bd88f'; g.font = FONT(Math.max(13, numF * 0.7));
-      g.fillText(`${money}₴`, u * 89.5, numY);
+      g.fillText(`${score}`, u * 89.5, numY);
       g.textAlign = 'left';
       return bh;
     };
@@ -2129,9 +2150,9 @@ export const doom: MiniGame3D = {
           g.fillRect(W / 2 + p.x - sz / 2, p.y - sz / 2, sz, sz);
         }
         g.restore();
-        fitFont(g, 'ТРИМАЙ ПОРТ · ОПЛАТА ЗА ВІДБИТУ ХВИЛЮ', W * 0.8, 15, FAM);
+        fitFont(g, 'ТРИМАЙ ПОРТ · ХВИЛЯ ЗА ХВИЛЕЮ', W * 0.8, 15, FAM);
         g.fillStyle = '#c88a5a';
-        g.fillText('ТРИМАЙ ПОРТ · ОПЛАТА ЗА ВІДБИТУ ХВИЛЮ', W / 2, H * 0.24 + 34);
+        g.fillText('ТРИМАЙ ПОРТ · ХВИЛЯ ЗА ХВИЛЕЮ', W / 2, H * 0.24 + 34);
         const menu = titleMenu();
         const step = menu.length >= 5 ? 48 : 58;
         for (let i = 0; i < menu.length; i++) {
@@ -2265,7 +2286,7 @@ export const doom: MiniGame3D = {
       g.fillText(`ТВАРЕЙ: ${alive}`, 16, 46);
       g.textAlign = 'right';
       g.fillStyle = '#c8a0a0'; g.font = FONT(12);
-      g.fillText(`ЗА ВОЛНУ +${waveReward(wave)}₴`, W - 16, 26);
+      g.fillText(`ЗА ВОЛНУ +${waveScore(wave)}`, W - 16, 26);
       g.fillText(`УБИТО: ${totalKills}`, W - 16, 46);
       g.textAlign = 'left';
 
@@ -2295,9 +2316,9 @@ export const doom: MiniGame3D = {
         fitFont(g, 'ВОЛНА ЗАЧИЩЕНА', W * 0.8, 34, FAM);
         g.fillStyle = '#7bd88f';
         g.fillText('ВОЛНА ЗАЧИЩЕНА', W / 2, H * 0.3);
-        fitFont(g, `ГОНОРАР +${waveReward(wave)}₴`, W * 0.6, 22, FAM);
+        fitFont(g, `ОЧКИ +${waveScore(wave)}`, W * 0.6, 22, FAM);
         g.fillStyle = '#e8c840';
-        g.fillText(`ГОНОРАР +${waveReward(wave)}₴`, W / 2, H * 0.3 + 32);
+        g.fillText(`ОЧКИ +${waveScore(wave)}`, W / 2, H * 0.3 + 32);
         fitFont(g, `следующая волна через ${Math.ceil(Math.max(0, 4 - phaseT))}…`, W * 0.6, 14, FAM);
         g.fillStyle = '#c88a5a';
         g.fillText(`следующая волна через ${Math.ceil(Math.max(0, 4 - phaseT))}…`, W / 2, H * 0.3 + 58);
@@ -2344,19 +2365,19 @@ export const doom: MiniGame3D = {
         g.fillStyle = '#ff4030';
         g.fillText('ТЕБЯ РАЗОРВАЛИ', W / 2, H * 0.26);
         g.restore();
-        fitFont(g, `${money}₴`, W * 0.6, 46, FAM);
+        fitFont(g, `${score}`, W * 0.6, 46, FAM);
         g.fillStyle = '#7bd88f';
-        g.fillText(`${money}₴`, W / 2, H * 0.26 + 56);
+        g.fillText(`${score}`, W / 2, H * 0.26 + 56);
         const sub = `волн пройдено: ${Math.max(0, wave - 1)} · твари: ${totalKills}`;
         fitFont(g, sub, W * 0.8, 15, FAM);
         g.fillStyle = '#c8a0a0';
         g.fillText(sub, W / 2, H * 0.26 + 84);
         const R = btnRects();
-        pixelBtn(R.cash, 'Вывести деньги', endSel === 0, '#7bd88f');
-        pixelBtn(R.work, 'Работать ещё', endSel === 1, '#e8c840');
+        pixelBtn(R.again, 'Ещё раз', endSel === 0, '#e8c840');
+        pixelBtn(R.menu, 'В меню', endSel === 1, '#7bd88f');
         fitFont(g, mob ? 'ТАП ПО КНОПКЕ' : 'КЛИК · ИЛИ ← / → И ENTER', W * 0.7, 13, FAM);
         g.fillStyle = '#8a6a60';
-        g.fillText(mob ? 'ТАП ПО КНОПКЕ' : 'КЛИК · ИЛИ ← / → И ENTER', W / 2, R.cash.y + R.cash.h + 34);
+        g.fillText(mob ? 'ТАП ПО КНОПКЕ' : 'КЛИК · ИЛИ ← / → И ENTER', W / 2, R.again.y + R.again.h + 34);
         g.textAlign = 'left';
       }
 
@@ -2531,7 +2552,6 @@ export const doom: MiniGame3D = {
           if (act === 'diff') setDiff(diffIx + 1);
           else if (act === 'arena') toggleArena();
           else if (act === 'edit') enterEditor();
-          else if (act === 'exit') { cleanup(); ctx.finish({ success: false, score: 0 }); return; }
           else {
             music.play('main', { fade: 1.4 });   // из chill в бой с наложением
             startWave();
@@ -2590,11 +2610,11 @@ export const doom: MiniGame3D = {
         let go = -1;
         if (pdEdge) {
           const pt = pv();
-          if (inRect(R.cash, pt.x, pt.y)) go = 0;
-          else if (inRect(R.work, pt.x, pt.y)) go = 1;
+          if (inRect(R.again, pt.x, pt.y)) go = 0;
+          else if (inRect(R.menu, pt.x, pt.y)) go = 1;
         } else if (enterEdge || keys.has('Space')) go = endSel;
-        if (go === 0) { cleanup(); ctx.finish({ success: money > 0, score: money }); return; }
-        if (go === 1) restart();
+        if (go === 0) restart();
+        if (go === 1) toTitle();
         drawHud();
         touch?.endFrame();
         return;
@@ -2664,7 +2684,7 @@ export const doom: MiniGame3D = {
             spawnCd = Math.max(0.15, ((rush ? 0.4 : 0.85) - wave * 0.02) * D.rate);
           }
         } else if (mons.length === 0 && pending.length === 0) {
-          money += waveReward(wave);
+          score += waveScore(wave);
           sfx.play('waveClear'); sfx.play('cash');
           music.play('middle', { loop: true, fade: 0.9 });  // передышка
           phase = 'clear'; phaseT = 0;
