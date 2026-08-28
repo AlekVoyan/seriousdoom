@@ -51,7 +51,8 @@ interface SfxDef { file: string; gain: number; vary: number; src: string }
 /** id → файл в /sfx, громкость, разброс высоты, источник */
 const SFX: Record<SfxId, SfxDef> = {
   pistol: { file: 'pistol.wav', gain: 1.66, vary: 0.06, src: 'OGA CC0 · выстрел CZ, обрезан строго по хлопку' },
-  shotgun: { file: 'shotgun.wav', gain: 1.06, vary: 0.05, src: 'собран: Kenney CC0 explosionCrunch + lowFreq + лязг помпы' },
+  // дробовик должен быть самым громким из троицы: он и так бьёт реже всех
+  shotgun: { file: 'shotgun.wav', gain: 2.4, vary: 0.05, src: 'собран: Kenney CC0 explosionCrunch + lowFreq + лязг помпы' },
   chaingun: { file: 'chaingun.wav', gain: 0.25, vary: 0.09, src: 'OGA CC0 · выстрел SKS, только атака (обрезан по хлопку)' },
   rocket: { file: 'rocket.wav', gain: 0.5, vary: 0.05, src: 'сгенерирован мной: щелчок запала + низкий толчок трубы + уходящий свист' },
   dryClick: { file: 'dryClick.ogg', gain: 1.3, vary: 0.03, src: 'Kenney CC0 · ui/click3' },
@@ -113,6 +114,8 @@ export interface SfxLoop {
   move(x: number, z: number): void;
   /** погасить и снять голос */
   stop(fade?: number): void;
+  /** достался ли голос: при выбранном лимите ручка пустая */
+  isLive(): boolean;
 }
 
 export interface DoomAudio {
@@ -262,7 +265,7 @@ export function createDoomAudio(): DoomAudio {
   const loops: LiveLoop[] = [];
   const LOOP_MAX = 4;                 // больше — каша, а не хор
   const SMOOTH = 0.05;                // сглаживание, иначе на движении «зиппер»
-  const NOOP: SfxLoop = { move() {}, stop() {} };
+  const NOOP: SfxLoop = { move() {}, stop() {}, isLive: () => false };
 
   /** пересчёт всех живых голосов под новое положение слушателя */
   const refreshLoops = () => {
@@ -318,6 +321,7 @@ export function createDoomAudio(): DoomAudio {
 
     return {
       move(x, z) { L.x = x; L.z = z; },
+      isLive: () => !L.dead,
       stop(fade = 0.18) {
         if (L.dead) return;
         L.dead = true;

@@ -124,6 +124,11 @@ const WEAPONS = [
 ];
 /** волна, на которой ракетница появляется на арене (после зачистки 15-й) */
 const RKT_WAVE = 16;
+/**
+ * Заряд камикадзе бьёт и по СВОИМ. Урон растёт вместе с живучестью тварей, так
+ * что доля от здоровья бомбиста постоянна — целый взрыв соседа переживает.
+ */
+const BOOM_SPLASH = { dmg: 14, radius: 4.5 };
 
 export const doom: MiniGame3D = {
   id: 'doom',
@@ -871,9 +876,38 @@ export const doom: MiniGame3D = {
       alive++;
       // вспышка телепорта: гул портала уже отыграл при зарядке печати,
       // здесь монстр подаёт голос — сразу слышно, кто и с какой стороны вылез
-      if (k === 'boom') m.wail = sfx.loop('boomWail', { x: sx, z: sz });
+      if (k === 'boom') giveWail(m);
       else sfx.play(VOICE[k], { x: sx, z: sz });
       for (let i = 0; i < 8; i++) puff(sx + (rng() - 0.5), 0.5 + rng() * 1.5, sz + (rng() - 0.5), 0xb060ff, 0.5);
+    };
+
+    /**
+     * Вой камикадзе. Одновременных голосов немного (LOOP_MAX в audioDoom) — иначе
+     * на наплыве получается каша вместо хора. Но раздавать их по порядку спавна
+     * нельзя: вой это ПРЕДУПРЕЖДЕНИЕ, орать должны те, кто уже бежит на тебя.
+     * Поэтому голоса переезжают к ближайшим, а дальние замолкают.
+     */
+    const WAIL_MAX = 4;
+    let wailT = 0;
+    const giveWail = (m: Mon) => {
+      const w = sfx.loop('boomWail', { x: m.x, z: m.z });
+      m.wail = w.isLive() ? w : undefined;
+    };
+    const tickWails = (dt: number) => {
+      wailT -= dt;
+      if (wailT > 0) return;
+      wailT = 0.4;
+      const booms = mons.filter((m) => m.kind === 'boom');
+      if (booms.length <= WAIL_MAX) {
+        for (const m of booms) if (!m.wail) giveWail(m);
+        return;
+      }
+      const d2 = (m: Mon) => (m.x - px) ** 2 + (m.z - pz) ** 2;
+      booms.sort((a, b) => d2(a) - d2(b));
+      booms.forEach((m, i) => {
+        if (i < WAIL_MAX) { if (!m.wail) giveWail(m); }
+        else if (m.wail) { m.wail.stop(0.3); m.wail = undefined; }
+      });
     };
 
     function puff(x: number, y: number, z: number, col: number, max: number) {
@@ -904,6 +938,54 @@ export const doom: MiniGame3D = {
       }
       ctx.scene.remove(m.grp);
       for (const mt of m.mats) mt.dispose();   // геометрия общая на вариант — живёт в кеше
+    };
+
+    /**
+     * Взрыв заряда камикадзе: свет, искры, звук и осколки ПО СВОИМ.
+     * Срабатывает и когда он добежал до бойца, и когда его застрелили — заряд-то
+     * при нём. Урон растёт вместе с живучестью тварей, поэтому доля от здоровья
+     * бомбиста постоянна (14 из 22): целый камикадзе взрыв соседа переживает и
+     * цепь сама не расходится. Подранок сдетонировать может — это честно, а
+     * глубина цепочки всё равно ограничена blastDepth.
+     */
+    let blastDepth = 0;
+    const boomBlast = (bx: number, bz: number, vet: boolean) => {
+      for (let q = 0; q < 22; q++) {
+        puff(bx + (rng() - 0.5) * 2, 0.6 + rng() * 2, bz + (rng() - 0.5) * 2,
+          q % 3 ? 0xff8030 : 0xffe090, 0.5);
+      }
+      muzzleLight.position.set(bx, 1.4, bz);
+      muzzleLight.intensity = 7;
+      sfx.play('explosion', { x: bx, z: bz });
+      if (blastDepth >= 2) return;
+      blastDepth++;
+      const dmg = BOOM_SPLASH.dmg * (1 + 0.05 * wave) * (vet ? 1.4 : 1);
+      // список целей снимаем ЗАРАНЕЕ: чужая смерть может утащить за собой ещё
+      // кого-то, и перебирать живой массив по индексам в этот момент нельзя
+      const targets = mons.filter(
+        (o) => Math.hypot(o.x - bx, o.z - bz) - MDEFS[o.kind].radius <= BOOM_SPLASH.radius,
+      );
+      for (const o of targets) {
+        if (!mons.includes(o)) continue;
+        const dd = Math.max(0, Math.hypot(o.x - bx, o.z - bz) - MDEFS[o.kind].radius);
+        o.hp -= dmg * (1 - dd / BOOM_SPLASH.radius);
+        o.hurtT = 0.14;
+        if (o.hp <= 0) { sfx.play('monsterDie', { x: o.x, z: o.z }); killMon(o); }
+      }
+      blastDepth--;
+    };
+
+    /** снять тварь с арены: куски, счётчики и — если это камикадзе — взрыв заряда */
+    const killMon = (m: Mon, count = true) => {
+      const wasBoom = m.kind === 'boom';
+      const bx = m.x, bz = m.z, vet = m.vet;
+      gibify(m);
+      const ix = mons.indexOf(m);
+      if (ix >= 0) mons.splice(ix, 1);
+      alive--;
+      if (count) kills++;
+      totalKills++;
+      if (wasBoom) boomBlast(bx, bz, vet);
     };
 
     // ── пикапы ──
@@ -1192,9 +1274,7 @@ export const doom: MiniGame3D = {
           if (best.hp <= 0) {
             sfx.play('monsterDie', { x: best.x, z: best.z });
             sfx.play('gib', { x: best.x, z: best.z });
-            gibify(best);
-            mons.splice(mons.indexOf(best), 1);
-            alive--; kills++; totalKills++;
+            killMon(best);
           }
         } else {
           // искры от стены
@@ -1217,8 +1297,8 @@ export const doom: MiniGame3D = {
       if (direct) direct.hp -= WEAPONS[3].dmg;
       // осколки — по спаду от ЭПИЦЕНТРА ДО КРАЯ твари: взрыв происходит на её
       // границе, и если мерить до центра, цель в упор получала бы 33 вместо 45
-      for (let i = mons.length - 1; i >= 0; i--) {
-        const m = mons[i];
+      for (const m of [...mons]) {          // копия: подорванный камикадзе тянет соседей
+        if (!mons.includes(m)) continue;
         const d = Math.max(0, Math.hypot(m.x - bx, m.z - bz) - MDEFS[m.kind].radius);
         if (d > ROCKET.radius) continue;
         const k = 1 - d / ROCKET.radius;
@@ -1226,9 +1306,7 @@ export const doom: MiniGame3D = {
         m.hurtT = 0.14;
         if (m.hp <= 0) {
           sfx.play('monsterDie', { x: m.x, z: m.z });
-          gibify(m);
-          mons.splice(i, 1);
-          alive--; kills++; totalKills++;
+          killMon(m);
         }
       }
       // себе — тот же спад, но слабее; проходит через броню, как любой урон
@@ -2590,8 +2668,10 @@ export const doom: MiniGame3D = {
         const step = rate * dt;
         return cur + Math.max(-step, Math.min(step, df));
       };
-      for (let i = mons.length - 1; i >= 0; i--) {
-        const m = mons[i];
+      // по КОПИИ списка: камикадзе взрывается прямо в своём ходе и может забрать
+      // соседей, а перебирать живой массив по индексам в этот момент нельзя
+      for (const m of [...mons]) {
+        if (!mons.includes(m)) continue;      // уже погиб в чужом взрыве
         const d = MDEFS[m.kind];
         m.t += dt;
         const wasX = m.x, wasZ = m.z;   // для разворота по фактическому движению
@@ -2793,13 +2873,8 @@ export const doom: MiniGame3D = {
         const touchDist = d.radius + P_RADIUS + 0.35;
         if (dist < touchDist) {
           if (m.kind === 'boom') {
-            // взрыв
-            for (let q = 0; q < 22; q++) puff(m.x + (rng() - 0.5) * 2, 0.6 + rng() * 2, m.z + (rng() - 0.5) * 2, q % 3 ? 0xff8030 : 0xffe090, 0.5);
-            muzzleLight.position.set(m.x, 1.4, m.z);
-            muzzleLight.intensity = 7;
-            sfx.play('explosion', { x: m.x, z: m.z });
-            hurt((d.explode ?? 20) * (m.vet ? 1.4 : 1) * D.dmg);
-            gibify(m); mons.splice(i, 1); alive--; totalKills++;
+            hurt((d.explode ?? 20) * (m.vet ? 1.4 : 1) * D.dmg);   // бойцу — полный
+            killMon(m, false);                                     // внутри рванёт по своим
             continue;
           }
           if (m.kind === 'kleer') {
@@ -2835,6 +2910,8 @@ export const doom: MiniGame3D = {
           }
         }
       }
+
+      tickWails(dt);
 
       // ── ракеты игрока ──
       for (let i = rockets.length - 1; i >= 0; i--) {
