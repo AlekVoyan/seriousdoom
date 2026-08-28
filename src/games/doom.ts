@@ -104,6 +104,10 @@ interface Mon {
   vx: number; vz: number; t: number; atkCd: number; hurtT: number;
   state: 'walk' | 'charge' | 'wind' | 'leap' | 'recover';
   windT: number; ph: number; leapT: number; hitThisLeap: boolean;
+  /** сторона обхода после сорванного тарана (рогач) */
+  dodge: number;
+  /** обход препятствия: сколько ещё идём вдоль него и от какой нормали */
+  skirtT: number; skirtNx: number; skirtNz: number;
   /** непрерывный вой (камикадзе) — гаснет вместе с монстром */
   wail?: SfxLoop;
 }
@@ -859,6 +863,7 @@ export const doom: MiniGame3D = {
         hp: d.hp * hpMul, maxHp: d.hp * hpMul,
         vx: 0, vz: 0, t: 0, atkCd: 0, hurtT: 0,
         state: 'walk', windT: 0, ph: rng() * 6.28, leapT: 0, hitThisLeap: false,
+        dodge: 1, skirtT: 0, skirtNx: 0, skirtNz: 0,
       };
       grp.position.set(sx, m.y, sz);
       grp.rotation.y = Math.atan2(-(px - sx), -(pz - sz));   // из печати — уже лицом к цели
@@ -2590,6 +2595,10 @@ export const doom: MiniGame3D = {
         const d = MDEFS[m.kind];
         m.t += dt;
         const wasX = m.x, wasZ = m.z;   // для разворота по фактическому движению
+        // состояние НА НАЧАЛО кадра: срыв разгона имеет смысл проверять только
+        // у того, кто в этом кадре реально пытался бежать. Иначе кадр «завод
+        // кончился → разгон» обрывает сам себя: двигаться в нём ещё не двигались
+        const state0 = m.state;
         if (!MDEFS[m.kind].flying) m.grp.position.y = 0;   // анимация пишет поверх, высота пола добавится в конце
         if (m.atkCd > 0) m.atkCd -= dt;
         if (m.hurtT > 0) m.hurtT -= dt;
@@ -2601,8 +2610,14 @@ export const doom: MiniGame3D = {
         if (m.kind === 'bull') {
           // рогач: заводится, потом таранит по прямой
           if (m.state === 'walk') {
-            m.x += ux * spd * 0.35 * dt; m.z += uz * spd * 0.35 * dt;
-            if (dist < 18) { m.state = 'wind'; m.windT = 0.7; m.vx = ux; m.vz = uz; }
+            // Пока тикает откат сорванного тарана — уходим ВБОК. Без этого бык
+            // бесконечно заводится напротив того же пилона: разгон срывается о
+            // него в первом же кадре, шаг заводит снова, и на дорогу остаются
+            // считаные проценты времени (замер в Godot-порте: 23 с заводки из 30).
+            const side = m.atkCd > 0 ? m.dodge * 1.2 : 0;
+            m.x += (ux + -uz * side) * spd * 0.35 * dt;
+            m.z += (uz + ux * side) * spd * 0.35 * dt;
+            if (dist < 18 && m.atkCd <= 0) { m.state = 'wind'; m.windT = 0.7; m.vx = ux; m.vz = uz; }
           } else if (m.state === 'wind') {
             m.windT -= dt;
             m.grp.position.y = Math.abs(Math.sin(m.t * 20)) * 0.12;
@@ -2694,17 +2709,6 @@ export const doom: MiniGame3D = {
           else m.grp.position.y = Math.abs(Math.sin(m.t * 11)) * 0.18; // бомбист трясётся
         }
 
-        // разведение монстров, чтобы не слипались
-        for (const o of mons) {
-          if (o === m || o.kind === 'harpy' !== (m.kind === 'harpy')) continue;
-          const ox = m.x - o.x, oz = m.z - o.z;
-          const dd = Math.hypot(ox, oz);
-          const need = MDEFS[m.kind].radius + MDEFS[o.kind].radius;
-          if (dd > 0.01 && dd < need) {
-            m.x += (ox / dd) * (need - dd) * 0.5;
-            m.z += (oz / dd) * (need - dd) * 0.5;
-          }
-        }
         if (!d.flying) {
           // в горку по ступенькам лезется медленнее — как и просилось
           const wasG = groundY(wasX, wasZ);
@@ -2713,14 +2717,40 @@ export const doom: MiniGame3D = {
             m.x = wasX + (m.x - wasX) * 0.72;
             m.z = wasZ + (m.z - wasZ) * 0.72;
           }
+          const preX = m.x, preZ = m.z;
           [m.x, m.z] = collide(m.x, m.z, d.radius);
+          // ОБХОД ПРЕПЯТСТВИЯ. Выталкивание из структуры симметрично: тварь,
+          // пришедшая в пилон в лоб, упирается и стоит в него насмерть (замер в
+          // Godot-порте: гнар не доходил до бойца за 30 с, даже когда тот ходил
+          // вбок). Сторона обхода выбирается ОДИН РАЗ на 1.2 с и своя у каждого
+          // (по ph): если пересчитывать её каждый кадр, тварь колеблется у
+          // пилона и доезжает ещё хуже — это тоже проверено замером.
+          // Разгон и прыжок не трогаем: там заморожено направление и свой срыв.
+          if (m.state !== 'charge' && m.state !== 'leap') {
+            const pushX = m.x - preX, pushZ = m.z - preZ;
+            const push = Math.hypot(pushX, pushZ);
+            if (push > spd * dt * 0.3 && m.skirtT <= 0) {
+              m.skirtT = 1.2;
+              m.skirtNx = pushX / push; m.skirtNz = pushZ / push;
+            }
+            if (m.skirtT > 0) {
+              m.skirtT -= dt;
+              const sgn = m.ph > Math.PI ? 1 : -1;
+              const tx = -m.skirtNz * sgn, tz = m.skirtNx * sgn;
+              [m.x, m.z] = collide(m.x + tx * spd * dt * 0.8, m.z + tz * spd * dt * 0.8, d.radius);
+            }
+          }
           // Таран/прыжок В СТЕНУ: направление у них заморожено, скользить
           // вдоль препятствия они не могут — без этой проверки рогач вечно
           // стоит, упёршись в фасад (арена-гейт), т.к. до края арены не доехал
-          if (m.kind === 'bull' && m.state === 'charge') {
+          if (m.kind === 'bull' && m.state === 'charge' && state0 === 'charge') {
             const moved = Math.hypot(m.x - wasX, m.z - wasZ);
-            if (moved < spd * dt * 0.4) { m.state = 'walk'; m.atkCd = 0.5; }
-          } else if (m.kind === 'kleer' && m.state === 'leap') {
+            if (moved < spd * dt * 0.4) {
+              m.state = 'walk';
+              m.atkCd = 1.2;                            // столько идём в обход, не заводясь
+              m.dodge = m.ph > Math.PI ? 1 : -1;        // сторона своя у каждого — не строем
+            }
+          } else if (m.kind === 'kleer' && m.state === 'leap' && state0 === 'leap') {
             const moved = Math.hypot(m.x - wasX, m.z - wasZ);
             if (moved < spd * dt * 0.5) {
               m.state = 'recover'; m.windT = 0.85; m.atkCd = 1.1;
@@ -2785,6 +2815,23 @@ export const doom: MiniGame3D = {
             [px, pz] = collide(px + ux * kb, pz + uz * kb, P_RADIUS);   // откидывает игрока
             m.x -= ux * 0.5; m.z -= uz * 0.5;                            // и сам отшатывается
             if (m.kind === 'bull') m.state = 'walk';
+          }
+        }
+      }
+
+      // Разведение тварей — ОТДЕЛЬНЫМ проходом, после хода всех. Внутри цикла
+      // толчок соседа попадал в замер пройденного пути, и толпа ложно срывала
+      // разгон рогача: он почти не бегал. Тут же замер видит только собственный
+      // ход твари, а срыв остаётся честным признаком «упёрся в структуру».
+      for (const m of mons) {
+        for (const o of mons) {
+          if (o === m || o.kind === 'harpy' !== (m.kind === 'harpy')) continue;
+          const ox = m.x - o.x, oz = m.z - o.z;
+          const dd = Math.hypot(ox, oz);
+          const need = MDEFS[m.kind].radius + MDEFS[o.kind].radius;
+          if (dd > 0.01 && dd < need) {
+            m.x += (ox / dd) * (need - dd) * 0.5;
+            m.z += (oz / dd) * (need - dd) * 0.5;
           }
         }
       }
