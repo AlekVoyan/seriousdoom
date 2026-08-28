@@ -2180,20 +2180,27 @@ export const doom: MiniGame3D = {
       g.restore();
     };
 
-    /** сколько кадров ещё заливать белым (синхромаркер под ?sfxlog=1) */
-    let syncLeft = sfxLog ? 3 : 0;
+    /** синхромаркер под ?sfxlog=1: белая заливка, пока не отдадим три кадра и 120 мс */
+    let syncOn = sfxLog, syncFrames = 0, syncT0 = 0;
     const drawHud = () => {
       const sc = hs();
       g.save();
       g.scale(sc, sc);
       try { drawHudInner(); } finally { g.restore(); }
-      // СИНХРОМАРКЕР: три белых кадра в начале забега. По ним монтаж совмещает
+      // СИНХРОМАРКЕР: белые кадры в начале забега. По ним монтаж совмещает
       // запись экрана с журналом звуков — первый белый кадр и есть общий ноль.
       // Считаем здесь, а не в onFrame: drawHud зовётся ровно раз за кадр из
       // любой фазы, а выходов из onFrame несколько.
-      if (syncLeft > 0) {
-        if (syncLeft === 3) sfxEvents.push({ type: 'marker', t: performance.now() / 1000 });
-        syncLeft--;
+      if (syncOn) {
+        if (syncFrames === 0) {
+          syncT0 = performance.now();
+          sfxEvents.push({ type: 'marker', t: syncT0 / 1000 });
+        }
+        syncFrames++;
+        // Три кадра игры — это ~50 мс, а захват экрана берёт 25-30 к/с и такую
+        // вспышку иногда пропускает целиком (уже теряли маркер на дубле).
+        // Поэтому держим ещё и по времени: 120 мс поймает любой захват.
+        if (syncFrames >= 3 && performance.now() - syncT0 >= 120) syncOn = false;
         g.fillStyle = '#fff';
         g.fillRect(0, 0, ctx.width, ctx.height);
       }
