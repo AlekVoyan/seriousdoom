@@ -366,19 +366,32 @@ export function runMiniGame3D(game: MiniGame3D, opts: MiniGameOpts = {}, rt: Run
 
     // ── автомат адаптива ──
     // Вниз: средний кадр хуже 22 мс дольше 2.5 с. Вверх: стабильно лучше 12 мс
-    // дольше 8 с; после каждого спуска подъём остывает 20 с — иначе лестница
-    // звенит туда-сюда на границе.
-    let badT = 0, goodT = 0, upCooldown = 0;
-    const adapt = (dt: number) => {
+    // дольше 8 с; после спуска подъём остывает 20 с, после подъёма — 6 с.
+    //
+    // Три предохранителя добыты багом «титул мигает первые полминуты»:
+    // 1) первые 6 с адаптив СПИТ — декод звука и догрузка красят замер, и
+    //    лестница ныряла вниз, а потом ступенька за ступенькой лезла обратно
+    //    (каждый resize пересоздаёт буфер — глазу это «мигание»);
+    // 2) одиночный кадр длиннее 70 мс — это фриз (декод, GC, свёрнутая
+    //    вкладка), а не слабый GPU: такие кадры счётчики сбрасывают, вниз
+    //    ведёт только УСТОЙЧИВО тяжёлый кадр;
+    // 3) каждая смена ступени пишется в консоль — у игрока с «мылом» или
+    //    «миганием» диагноз виден в devtools без пересборки.
+    let badT = 0, goodT = 0, upCooldown = 0, warmup = 6;
+    const adapt = (dt: number, wall: number) => {
+      if (warmup > 0) { warmup -= dt; return; }
       upCooldown = Math.max(0, upCooldown - dt);
+      if (wall > 70) { badT = 0; goodT = 0; return; }
       if (perf.frame > 22) { badT += dt; goodT = 0; }
       else if (perf.frame < 12) { goodT += dt; badT = 0; }
       else { badT = 0; goodT = 0; }
       if (badT > 2.5 && dprIx < DPR_STEPS.length - 1) {
         dprIx++; badT = 0; goodT = 0; upCooldown = 20;
+        console.info(`[фаєрвол] адаптив: разрешение вниз, ×${effDpr().toFixed(2)}`);
         resize();
       } else if (goodT > 8 && dprIx > 0 && upCooldown <= 0) {
-        dprIx--; goodT = 0;
+        dprIx--; goodT = 0; upCooldown = 6;
+        console.info(`[фаєрвол] адаптив: разрешение вверх, ×${effDpr().toFixed(2)}`);
         resize();
       }
     };
@@ -437,7 +450,7 @@ export function runMiniGame3D(game: MiniGame3D, opts: MiniGameOpts = {}, rt: Run
       const t2 = performance.now();
       perf.update += (t1 - t0 - perf.update) * 0.1;
       perf.render += (t2 - t1 - perf.render) * 0.1;
-      adapt(dt);
+      adapt(dt, wall);
       perf.dpr = effDpr();
       perf.calls = renderer.info.render.calls;
       perf.tris = renderer.info.render.triangles;
