@@ -24,7 +24,7 @@ export const STRINGS: Record<string, { uk: string; en: string }> = {
   'title.tap': { uk: 'ТАП ПО ПУНКТУ', en: 'TAP AN ITEM' },
   'title.keys': { uk: '↑↓ ВИБІР · ENTER / SPACE — СТАРТ', en: '↑↓ SELECT · ENTER / SPACE — START' },
   // сам чит-код не переводится — он вводится клавишами, как в думе
-  'title.idclev': { uk: 'IDCLEV {0}▂', en: 'IDCLEV {0}▂' },
+  'title.idclev': { uk: 'IDCLEV {0}_', en: 'IDCLEV {0}_' },
 
   // ── ПУНКТЫ МЕНЮ ──
   'menu.play': { uk: 'НОВА ГРА', en: 'NEW GAME' },
@@ -68,7 +68,7 @@ export const STRINGS: Record<string, { uk: string; en: string }> = {
   'hud.rush': { uk: 'ХВИЛЯ {0} — НАВАЛА БОМБІСТІВ!', en: 'WAVE {0} — BOMBER RUSH!' },
   'hud.cleared': { uk: 'ХВИЛЮ ЗАЧИЩЕНО', en: 'WAVE CLEARED' },
   'hud.score': { uk: 'ОЧКИ +{0}', en: 'SCORE +{0}' },
-  'hud.next': { uk: 'наступна хвиля за {0}…', en: 'next wave in {0}…' },
+  'hud.next': { uk: 'наступна хвиля за {0}...', en: 'next wave in {0}...' },
   'hud.rkt': { uk: 'РАКЕТНИЦЯ — КЛАВІША 4', en: 'ROCKET LAUNCHER — KEY 4' },
   'hud.rkt.warn': {
     uk: "ОСКОЛКИ Б'ЮТЬ І ПО ТОБІ — НЕ СТРІЛЯЙ ВПРИТУЛ",
@@ -113,8 +113,8 @@ export const STRINGS: Record<string, { uk: string; en: string }> = {
   // ── РЕДАКТОР: шапка и подсказки ──
   'ed.title': { uk: 'РЕДАКТОР АРЕНИ', en: 'ARENA EDITOR' },
   'ed.counts': {
-    uk: 'пілони {0}/{1} · факели {2}/{3} · печатки {4}/{5} · предмети {6}/{7} · розмір {8}×{8} · небо: {9} · підлога: {10}'
-      + ' · размер {8}×{8} · небо: {9} · пол: {10}',
+    uk: 'пілони {0}/{1} · факели {2}/{3} · печатки {4}/{5} · предмети {6}/{7}'
+      + ' · розмір {8}×{8} · небо: {9} · підлога: {10}',
     en: 'pillars {0}/{1} · torches {2}/{3} · seals {4}/{5} · items {6}/{7}'
       + ' · size {8}×{8} · sky: {9} · floor: {10}',
   },
@@ -123,10 +123,10 @@ export const STRINGS: Record<string, { uk: string; en: string }> = {
     en: 'at least 2 spawn seals are needed, otherwise the test will not start',
   },
   'ed.help': {
-    uk: 'ЛКМ поставити · ПКМ/X прибрати · цифра — категорія (повтор гортає) · колесо — всі варіанти · T поворот 45° · WASD+SPACE/SHIFT політ (R швидше) · −/+ розмір · B небо · F підлога · G тест · Q титул · K/L зберегти/завантажити · E/I експорт/імпорт'
-      + ' · WASD+SPACE/SHIFT полёт (R быстрее) · −/+ размер · B небо · F пол · G тест · Q титул · K/L сохранить/загрузить · E/I экспорт/импорт',
+    uk: 'ЛКМ поставити · ПКМ/X прибрати · цифра — категорія (повтор гортає) · колесо — всі варіанти · T поворот 45°'
+      + ' · WASD+SPACE/SHIFT політ (R швидше) · -/+ розмір · B небо · F підлога · G тест · Q титул · K/L зберегти/завантажити · E/I експорт/імпорт',
     en: 'LMB place · RMB/X remove · digit — category (press again to cycle) · wheel — all variants · T rotate 45°'
-      + ' · WASD+SPACE/SHIFT fly (R faster) · −/+ size · B sky · F floor · G test · Q title · K/L save/load · E/I export/import',
+      + ' · WASD+SPACE/SHIFT fly (R faster) · -/+ size · B sky · F floor · G test · Q title · K/L save/load · E/I export/import',
   },
   'ed.hello': {
     uk: 'РЕДАКТОР: ЛКМ — поставити, ПКМ — прибрати, G — тест',
@@ -141,7 +141,7 @@ export const STRINGS: Record<string, { uk: string; en: string }> = {
   'ed.noClip': { uk: 'БУФЕР НЕДОСТУПНИЙ', en: 'CLIPBOARD UNAVAILABLE' },
   'ed.pastePrompt': { uk: 'Встав JSON арени:', en: 'Paste arena JSON:' },
   'ed.imported': { uk: 'АРЕНУ ІМПОРТОВАНО', en: 'ARENA IMPORTED' },
-  'ed.notArena': { uk: 'НЕ СХОЖЕ НА АРЕНУ (потрібно ≥2 печатки)', en: 'NOT AN ARENA (need ≥2 seals)' },
+  'ed.notArena': { uk: 'НЕ СХОЖЕ НА АРЕНУ (потрібно >=2 печатки)', en: 'NOT AN ARENA (need >=2 seals)' },
   'ed.badJson': { uk: 'БИТИЙ JSON', en: 'BROKEN JSON' },
   'ed.defaultLoaded': { uk: 'БАЗОВУ АРЕНУ ЗАВАНТАЖЕНО', en: 'DEFAULT ARENA LOADED' },
   'ed.maxSize': { uk: 'БІЛЬШЕ НІКУДИ (40)', en: 'NO BIGGER THAN THIS (40)' },

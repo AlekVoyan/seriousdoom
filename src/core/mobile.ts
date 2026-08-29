@@ -87,7 +87,7 @@ type G = CanvasRenderingContext2D;
 
 /**
  * Подобрать размер шрифта (px), чтобы текст влез в maxW. Возвращает строку для
- * g.font. family — напр. '"PixelHalf", ui-monospace, monospace'. Меняет g.font
+ * g.font. family — напр. '"PixCyrillic", ui-monospace, monospace'. Меняет g.font
  * как побочный эффект (на подобранный), так что можно сразу рисовать.
  */
 // Кеш подбора: measureText не бесплатен, а HUD зовёт fitFont до 13 раз за кадр

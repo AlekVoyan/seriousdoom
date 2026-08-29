@@ -163,9 +163,9 @@ export const doom: MiniGame3D = {
     // эмулятор устройства отдаёт скриншот в CSS-пикселях, а не в пикселях
     // канваса. На живом сайте флага нет — там работает обычное определение.
     const mob = isTouchDevice() || new URLSearchParams(location.search).get('mob') === '1';
-    void document.fonts?.load?.('16px "PixelHalf"');
-    const FONT = (n: number) => `${n}px "PixelHalf", ui-monospace, monospace`;
-    const FAM = '"PixelHalf", ui-monospace, monospace';
+    void document.fonts?.load?.('16px "PixCyrillic"');
+    const FONT = (n: number) => `${n}px "PixCyrillic", ui-monospace, monospace`;
+    const FAM = '"PixCyrillic", ui-monospace, monospace';
     /** служебный моноширинный: счётчики и подсказки редактора */
     const MONO = 'ui-monospace, monospace';
 
